@@ -18,8 +18,10 @@ export type WorkerCommandName =
   | 'open_pdf'
   | 'print_pdf'
   | 'render_page'
+  | 'redo_pending'
   | 'save_copy'
   | 'search_text'
+  | 'undo_pending'
 
 export type WorkerSearchResult = {
   page_index: number
@@ -37,6 +39,8 @@ export type WorkerState = {
   display_page_number: number
   zoom_level: number
   dirty: boolean
+  can_undo: boolean
+  can_redo: boolean
   selected_page_indices: number[]
   selected_tool: string | null
 }

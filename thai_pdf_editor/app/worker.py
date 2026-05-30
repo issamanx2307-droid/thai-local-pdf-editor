@@ -29,6 +29,7 @@ from thai_pdf_editor.app.core.pdf_search import search_pdf_text
 from thai_pdf_editor.app.core.print_operations import get_default_printer, list_printers, print_pdf
 from thai_pdf_editor.app.core.save_manager import SaveManager
 from thai_pdf_editor.app.core.signature_operations import create_visual_signature_image
+from thai_pdf_editor.app.core.undo_redo import redo_last_pending, undo_last_pending
 from thai_pdf_editor.app.logging_config import setup_logging
 from thai_pdf_editor.app.models.geometry import PdfPoint, PdfRect
 from thai_pdf_editor.app.worker_contract import (
@@ -49,8 +50,10 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_OPEN_PDF,
     COMMAND_PRINT_PDF,
     COMMAND_RENDER_PAGE,
+    COMMAND_REDO_PENDING,
     COMMAND_SAVE_COPY,
     COMMAND_SEARCH_TEXT,
+    COMMAND_UNDO_PENDING,
     error_response,
     state_payload,
     success_response,
@@ -114,6 +117,10 @@ class PdfWorkerSession:
                 return self._save_copy(payload)
             if command == COMMAND_PRINT_PDF:
                 return self._print_pdf(payload)
+            if command == COMMAND_UNDO_PENDING:
+                return self._undo_pending()
+            if command == COMMAND_REDO_PENDING:
+                return self._redo_pending()
             if command == COMMAND_CLOSE_DOCUMENT:
                 return self._close_document()
             raise InvalidOperationError("คำสั่ง worker ไม่ถูกต้อง", detail=f"unknown command: {command}")
@@ -228,6 +235,40 @@ class PdfWorkerSession:
                 "printer_name": printer_name,
                 "copies": copies,
                 "source_path": str(source_path),
+            },
+        )
+
+    def _undo_pending(self) -> dict[str, Any]:
+        self._require_document()
+        operation = undo_last_pending(self.state)
+        page_index = int(getattr(operation, "page_index", self.state.current_page_index))
+        if 0 <= page_index < self.state.total_pages:
+            self.state.set_current_page(page_index)
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_UNDO_PENDING,
+            self.state,
+            {
+                "operation_id": getattr(operation, "id", ""),
+                "page_index": getattr(operation, "page_index", self.state.current_page_index),
+                "pending_count": len(self.state.pending_operations),
+            },
+        )
+
+    def _redo_pending(self) -> dict[str, Any]:
+        self._require_document()
+        operation = redo_last_pending(self.state)
+        page_index = int(getattr(operation, "page_index", self.state.current_page_index))
+        if 0 <= page_index < self.state.total_pages:
+            self.state.set_current_page(page_index)
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_REDO_PENDING,
+            self.state,
+            {
+                "operation_id": getattr(operation, "id", ""),
+                "page_index": getattr(operation, "page_index", self.state.current_page_index),
+                "pending_count": len(self.state.pending_operations),
             },
         )
 

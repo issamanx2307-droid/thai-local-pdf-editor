@@ -31,8 +31,10 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_OPEN_PDF,
     COMMAND_PRINT_PDF,
     COMMAND_RENDER_PAGE,
+    COMMAND_REDO_PENDING,
     COMMAND_SAVE_COPY,
     COMMAND_SEARCH_TEXT,
+    COMMAND_UNDO_PENDING,
 )
 
 from tests.fixtures.create_sample_pdfs import create_sample_pdf
@@ -456,6 +458,59 @@ def test_worker_shape_overlays_preview_and_save_copy(tmp_path) -> None:
         with fitz.open(str(output_path)) as saved_pdf:
             assert saved_pdf.page_count == 1
             assert len(saved_pdf[0].get_drawings()) >= 2
+    finally:
+        session.close()
+
+
+def test_worker_undo_and_redo_pending_overlay_refreshes_state(tmp_path) -> None:
+    """Worker undo/redo commands should expose React-ready toolbar state."""
+    source_path = create_sample_pdf(tmp_path / "undo-source.pdf", pages=1)
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        opened = session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})
+        assert opened["ok"] is True
+        assert opened["state"]["can_undo"] is False
+        assert opened["state"]["can_redo"] is False
+
+        added = session.handle(
+            {
+                "command": COMMAND_DRAW_RECTANGLE_OVERLAY,
+                "payload": {
+                    "selected_page_index": 0,
+                    "x": 72,
+                    "y": 144,
+                    "width": 180,
+                    "height": 72,
+                    "color": "#d32f2f",
+                    "line_width": 2,
+                },
+            }
+        )
+        assert added["ok"] is True
+        assert added["state"]["can_undo"] is True
+        assert added["state"]["can_redo"] is False
+        assert len(session.state.pending_operations) == 1
+
+        undone = session.handle({"command": COMMAND_UNDO_PENDING})
+        assert undone["ok"] is True
+        assert undone["payload"]["pending_count"] == 0
+        assert undone["state"]["dirty"] is False
+        assert undone["state"]["can_undo"] is False
+        assert undone["state"]["can_redo"] is True
+        assert len(session.state.pending_operations) == 0
+
+        redone = session.handle({"command": COMMAND_REDO_PENDING})
+        assert redone["ok"] is True
+        assert redone["payload"]["pending_count"] == 1
+        assert redone["state"]["dirty"] is True
+        assert redone["state"]["can_undo"] is True
+        assert redone["state"]["can_redo"] is False
+        assert len(session.state.pending_operations) == 1
+
+        rendered = session.handle({"command": COMMAND_RENDER_PAGE, "payload": {"page_index": 0, "zoom": 1.0}})
+        assert rendered["ok"] is True
+        assert Path(rendered["payload"]["preview_path"]).exists()
     finally:
         session.close()
 

@@ -8,6 +8,7 @@ from typing import Any
 
 from thai_pdf_editor.app.core.document_state import DocumentState
 from thai_pdf_editor.app.core.errors import AppError
+from thai_pdf_editor.app.core.undo_redo import can_redo_pending, can_undo_pending
 
 COMMAND_BATCH = "batch"
 COMMAND_ADD_TEXT_OVERLAY = "add_text_overlay"
@@ -26,8 +27,10 @@ COMMAND_MOVE_PAGE = "move_page"
 COMMAND_OPEN_PDF = "open_pdf"
 COMMAND_PRINT_PDF = "print_pdf"
 COMMAND_RENDER_PAGE = "render_page"
+COMMAND_REDO_PENDING = "redo_pending"
 COMMAND_SAVE_COPY = "save_copy"
 COMMAND_SEARCH_TEXT = "search_text"
+COMMAND_UNDO_PENDING = "undo_pending"
 
 
 def state_payload(state: DocumentState) -> dict[str, Any]:
@@ -41,6 +44,8 @@ def state_payload(state: DocumentState) -> dict[str, Any]:
         "display_page_number": state.display_page_number,
         "zoom_level": state.zoom_level,
         "dirty": state.dirty,
+        "can_undo": can_undo_pending(state),
+        "can_redo": can_redo_pending(state),
         "selected_page_indices": list(state.selected_page_indices),
         "selected_tool": state.selected_tool,
     }

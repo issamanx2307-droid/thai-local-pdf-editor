@@ -61,6 +61,8 @@ const commandNames: WorkerCommandName[] = [
   'search_text',
   'save_copy',
   'print_pdf',
+  'undo_pending',
+  'redo_pending',
 ]
 const demoCommandNames = new Set<WorkerCommandName>(['open_pdf', 'render_page'])
 type BridgeStatus = 'idle' | 'connecting' | 'ready' | 'error'
@@ -106,6 +108,8 @@ function App() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [documentPath, setDocumentPath] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
+  const [canUndo, setCanUndo] = useState(false)
+  const [canRedo, setCanRedo] = useState(false)
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>('idle')
   const [statusMessage, setStatusMessage] = useState('กดเปิดไฟล์เพื่อโหลด PDF ตัวอย่างผ่าน worker')
   const [lastCommand, setLastCommand] = useState<WorkerCommandName | 'demo' | null>(null)
@@ -142,6 +146,8 @@ function App() {
       setZoomPercent(defaultZoomPercent)
       setDocumentPath(null)
       setDirty(false)
+      setCanUndo(false)
+      setCanRedo(false)
       setPreviewUrl(null)
       return
     }
@@ -157,6 +163,8 @@ function App() {
     setZoomPercent(Math.round((nextState.zoom_level || 1) * 100))
     setDocumentPath(nextState.current_file_path)
     setDirty(nextState.dirty)
+    setCanUndo(Boolean(nextState.can_undo))
+    setCanRedo(Boolean(nextState.can_redo))
 
     const nextPreviewUrl = previewUrlFrom(renderResponse)
     if (nextPreviewUrl) {
@@ -337,6 +345,44 @@ function App() {
       setIsBusy(false)
     }
   }, [applyResponse, hasDocument, selectedPageIndex, zoomPercent])
+
+  const runPendingHistory = useCallback(
+    async (command: 'undo_pending' | 'redo_pending') => {
+      const isUndo = command === 'undo_pending'
+      if (!hasDocument) {
+        setStatusMessage('ยังไม่ได้เปิดไฟล์ PDF')
+        return
+      }
+      if (isUndo ? !canUndo : !canRedo) {
+        setStatusMessage(isUndo ? 'ไม่มีคำสั่งให้ย้อนกลับ' : 'ไม่มีคำสั่งให้ทำซ้ำ')
+        return
+      }
+
+      setIsBusy(true)
+      setLastCommand(command)
+      setStatusMessage(isUndo ? 'กำลังย้อนกลับคำสั่งล่าสุดผ่าน worker...' : 'กำลังทำซ้ำคำสั่งล่าสุดผ่าน worker...')
+      try {
+        const response = await callWorker({
+          command: 'batch',
+          commands: [
+            { command },
+            { command: 'render_page', payload: { zoom: zoomPercent / 100 } },
+          ],
+        })
+        applyResponse(response)
+        setSearchResults([])
+        setActiveSearchIndex(-1)
+        setBridgeStatus('ready')
+        setStatusMessage(isUndo ? 'ย้อนกลับคำสั่งล่าสุดแล้ว' : 'ทำซ้ำคำสั่งล่าสุดแล้ว')
+      } catch (error) {
+        setBridgeStatus('error')
+        setStatusMessage(error instanceof Error ? error.message : isUndo ? 'ย้อนกลับไม่สำเร็จ' : 'ทำซ้ำไม่สำเร็จ')
+      } finally {
+        setIsBusy(false)
+      }
+    },
+    [applyResponse, canRedo, canUndo, hasDocument, zoomPercent],
+  )
 
   const closeDocument = useCallback(async () => {
     if (!hasDocument) {
@@ -783,6 +829,8 @@ function App() {
   return (
     <main className="app-shell">
       <Toolbar
+        canRedo={canRedo}
+        canUndo={canUndo}
         hasDocument={hasDocument}
         isBusy={isBusy}
         searchResultSummary={searchResultSummary}
@@ -796,10 +844,12 @@ function App() {
         onOpenDemo={loadDemo}
         onPreviousPage={() => void renderPage(Math.max(0, selectedPageIndex - 1))}
         onPrint={openPrintDialog}
+        onRedo={() => void runPendingHistory('redo_pending')}
         onRunSearch={() => void runSearch()}
         onSaveCopy={() => void saveCopy()}
         onMergePdfs={() => mergePdfInputRef.current?.click()}
         onOpenGuide={openGuide}
+        onUndo={() => void runPendingHistory('undo_pending')}
         onZoomIn={() => void renderPage(selectedPageIndex, Math.min(240, zoomPercent + 10))}
         onZoomOut={() => void renderPage(selectedPageIndex, Math.max(50, zoomPercent - 10))}
       />
@@ -890,6 +940,8 @@ function App() {
 }
 
 function Toolbar({
+  canRedo,
+  canUndo,
   hasDocument,
   isBusy,
   searchResultSummary,
@@ -903,13 +955,17 @@ function Toolbar({
   onOpenDemo,
   onPreviousPage,
   onPrint,
+  onRedo,
   onRunSearch,
   onSaveCopy,
   onMergePdfs,
   onOpenGuide,
+  onUndo,
   onZoomIn,
   onZoomOut,
 }: {
+  canRedo: boolean
+  canUndo: boolean
   hasDocument: boolean
   isBusy: boolean
   searchResultSummary: string
@@ -923,10 +979,12 @@ function Toolbar({
   onOpenDemo: () => void
   onPreviousPage: () => void
   onPrint: () => void
+  onRedo: () => void
   onRunSearch: () => void
   onSaveCopy: () => void
   onMergePdfs: () => void
   onOpenGuide: () => void
+  onUndo: () => void
   onZoomIn: () => void
   onZoomOut: () => void
 }) {
@@ -939,8 +997,8 @@ function Toolbar({
         <ToolButton icon={<Printer />} label="พิมพ์" disabled={isBusy || !hasDocument} onClick={onPrint} />
       </ToolbarGroup>
       <ToolbarGroup label="แก้ไข">
-        <ToolButton icon={<RotateCcw />} label="ย้อนกลับ" muted />
-        <ToolButton icon={<RotateCw />} label="ทำซ้ำ" muted />
+        <ToolButton icon={<RotateCcw />} label="ย้อนกลับ" disabled={isBusy || !canUndo} onClick={onUndo} />
+        <ToolButton icon={<RotateCw />} label="ทำซ้ำ" disabled={isBusy || !canRedo} onClick={onRedo} />
         <ToolButton icon={<FileDown />} label="รวม PDF" disabled={isBusy} onClick={onMergePdfs} />
       </ToolbarGroup>
       <ToolbarGroup label="มุมมอง">
