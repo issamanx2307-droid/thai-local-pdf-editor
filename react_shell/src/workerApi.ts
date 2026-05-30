@@ -9,6 +9,14 @@ export type WorkerCommandName =
   | 'move_page'
   | 'open_pdf'
   | 'render_page'
+  | 'search_text'
+
+export type WorkerSearchResult = {
+  page_index: number
+  match_index: number
+  rect: [number, number, number, number]
+  label: string
+}
 
 export type WorkerState = {
   has_document: boolean

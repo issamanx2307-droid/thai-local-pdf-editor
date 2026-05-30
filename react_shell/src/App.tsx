@@ -31,6 +31,7 @@ import {
   previewUrlFrom,
   type WorkerCommandName,
   type WorkerResponse,
+  type WorkerSearchResult,
   type WorkerState,
 } from './workerApi'
 import './App.css'
@@ -45,9 +46,33 @@ const commandNames: WorkerCommandName[] = [
   'move_page',
   'duplicate_page',
   'delete_page',
+  'search_text',
 ]
 const demoCommandNames = new Set<WorkerCommandName>(['open_pdf', 'render_page'])
 type BridgeStatus = 'idle' | 'connecting' | 'ready' | 'error'
+
+function searchResultsFrom(response: WorkerResponse): WorkerSearchResult[] {
+  const results = response.payload.results
+  if (!Array.isArray(results)) {
+    return []
+  }
+  return results.filter(isWorkerSearchResult)
+}
+
+function isWorkerSearchResult(value: unknown): value is WorkerSearchResult {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const item = value as Partial<WorkerSearchResult>
+  return (
+    typeof item.page_index === 'number' &&
+    typeof item.match_index === 'number' &&
+    Array.isArray(item.rect) &&
+    item.rect.length === 4 &&
+    item.rect.every((coordinate) => typeof coordinate === 'number') &&
+    typeof item.label === 'string'
+  )
+}
 
 function App() {
   const [pages, setPages] = useState(fallbackPages)
@@ -60,10 +85,15 @@ function App() {
   const [statusMessage, setStatusMessage] = useState('กดเปิดไฟล์เพื่อโหลด PDF ตัวอย่างผ่าน worker')
   const [lastCommand, setLastCommand] = useState<WorkerCommandName | 'demo' | null>(null)
   const [isBusy, setIsBusy] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<WorkerSearchResult[]>([])
+  const [activeSearchIndex, setActiveSearchIndex] = useState(-1)
 
   const totalPages = pages.length
   const selectedPageNumber = selectedPageIndex + 1
   const hasDocument = Boolean(documentPath)
+  const searchResultSummary =
+    searchResults.length > 0 && activeSearchIndex >= 0 ? `${activeSearchIndex + 1}/${searchResults.length}` : ''
 
   const applyResponse = useCallback((response: WorkerResponse, renderResponse = lastRenderResponse(response)) => {
     const nextState: WorkerState = renderResponse?.state || response.state
@@ -94,6 +124,8 @@ function App() {
       await getBridgeHealth()
       const response = await openDemoDocument()
       applyResponse(response)
+      setSearchResults([])
+      setActiveSearchIndex(-1)
       setBridgeStatus('ready')
       setStatusMessage('เชื่อมต่อ Python worker แล้ว')
     } catch (error) {
@@ -147,6 +179,8 @@ function App() {
           ],
         })
         applyResponse(response)
+        setSearchResults([])
+        setActiveSearchIndex(-1)
         setBridgeStatus('ready')
         setStatusMessage('ย้ายหน้าแล้ว')
       } catch (error) {
@@ -178,6 +212,8 @@ function App() {
         ],
       })
       applyResponse(response)
+      setSearchResults([])
+      setActiveSearchIndex(-1)
       setBridgeStatus('ready')
       setStatusMessage('ทำซ้ำหน้าแล้ว')
     } catch (error) {
@@ -211,6 +247,8 @@ function App() {
         ],
       })
       applyResponse(response)
+      setSearchResults([])
+      setActiveSearchIndex(-1)
       setBridgeStatus('ready')
       setStatusMessage('ลบหน้าแล้ว')
     } catch (error) {
@@ -220,6 +258,78 @@ function App() {
       setIsBusy(false)
     }
   }, [applyResponse, hasDocument, selectedPageIndex, totalPages, zoomPercent])
+
+  const goToSearchResult = useCallback(
+    async (resultIndex: number) => {
+      if (!searchResults.length) {
+        return
+      }
+      const nextIndex = (resultIndex + searchResults.length) % searchResults.length
+      const result = searchResults[nextIndex]
+
+      setIsBusy(true)
+      setLastCommand('search_text')
+      setStatusMessage('กำลังเปิดผลค้นหา...')
+      try {
+        const response = await callWorker({
+          command: 'render_page',
+          payload: { page_index: result.page_index, zoom: zoomPercent / 100 },
+        })
+        applyResponse(response, response)
+        setBridgeStatus('ready')
+        setActiveSearchIndex(nextIndex)
+        setStatusMessage(`ผลค้นหา ${nextIndex + 1}/${searchResults.length}: ${result.label}`)
+      } catch (error) {
+        setBridgeStatus('error')
+        setStatusMessage(error instanceof Error ? error.message : 'เปิดผลค้นหาไม่สำเร็จ')
+      } finally {
+        setIsBusy(false)
+      }
+    },
+    [applyResponse, searchResults, zoomPercent],
+  )
+
+  const runSearch = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนค้นหา')
+      return
+    }
+
+    const query = searchQuery.trim()
+    if (!query) {
+      setStatusMessage('กรุณากรอกคำค้นหา')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('search_text')
+    setStatusMessage('กำลังค้นหาใน text layer...')
+    try {
+      const searchResponse = await callWorker({ command: 'search_text', payload: { query } })
+      const results = searchResultsFrom(searchResponse)
+      if (!results.length) {
+        throw new Error('ไม่พบผลค้นหา')
+      }
+
+      const firstResult = results[0]
+      const renderResponse = await callWorker({
+        command: 'render_page',
+        payload: { page_index: firstResult.page_index, zoom: zoomPercent / 100 },
+      })
+      applyResponse(renderResponse, renderResponse)
+      setSearchResults(results)
+      setActiveSearchIndex(0)
+      setBridgeStatus('ready')
+      setStatusMessage(`ค้นหา "${query}" พบ ${results.length} รายการ`)
+    } catch (error) {
+      setSearchResults([])
+      setActiveSearchIndex(-1)
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'ค้นหาไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument, searchQuery, zoomPercent])
 
   const showPendingReactFeature = useCallback((featureName: string) => {
     setStatusMessage(`${featureName} ยังไม่ได้ต่อใน React shell ใช้ได้ในแอป desktop ตอนนี้`)
@@ -239,6 +349,7 @@ function App() {
       <Toolbar
         hasDocument={hasDocument}
         isBusy={isBusy}
+        searchResultSummary={searchResultSummary}
         selectedPage={selectedPageNumber}
         totalPages={totalPages}
         zoom={zoomPercent}
@@ -247,6 +358,7 @@ function App() {
         onNextPage={() => void renderPage(Math.min(totalPages - 1, selectedPageIndex + 1))}
         onOpenDemo={loadDemo}
         onPreviousPage={() => void renderPage(Math.max(0, selectedPageIndex - 1))}
+        onRunSearch={() => void runSearch()}
         onUnavailableAction={showPendingReactFeature}
         onZoomIn={() => void renderPage(selectedPageIndex, Math.min(240, zoomPercent + 10))}
         onZoomOut={() => void renderPage(selectedPageIndex, Math.max(50, zoomPercent - 10))}
@@ -271,8 +383,18 @@ function App() {
           zoom={zoomPercent}
         />
         <ToolPanel
+          activeSearchIndex={activeSearchIndex}
           bridgeStatus={bridgeStatus}
+          hasDocument={hasDocument}
+          isBusy={isBusy}
+          onNextSearchResult={() => void goToSearchResult(activeSearchIndex + 1)}
+          onPreviousSearchResult={() => void goToSearchResult(activeSearchIndex - 1)}
+          onRunSearch={() => void runSearch()}
+          onSearchQueryChange={setSearchQuery}
+          onSelectSearchResult={(resultIndex) => void goToSearchResult(resultIndex)}
           onUnavailableAction={showPendingReactFeature}
+          searchQuery={searchQuery}
+          searchResults={searchResults}
           workerCommands={workerCommands}
         />
       </section>
@@ -291,6 +413,7 @@ function App() {
 function Toolbar({
   hasDocument,
   isBusy,
+  searchResultSummary,
   selectedPage,
   totalPages,
   zoom,
@@ -299,12 +422,14 @@ function Toolbar({
   onNextPage,
   onOpenDemo,
   onPreviousPage,
+  onRunSearch,
   onUnavailableAction,
   onZoomIn,
   onZoomOut,
 }: {
   hasDocument: boolean
   isBusy: boolean
+  searchResultSummary: string
   selectedPage: number
   totalPages: number
   zoom: number
@@ -313,6 +438,7 @@ function Toolbar({
   onNextPage: () => void
   onOpenDemo: () => void
   onPreviousPage: () => void
+  onRunSearch: () => void
   onUnavailableAction: (featureName: string) => void
   onZoomIn: () => void
   onZoomOut: () => void
@@ -357,7 +483,8 @@ function Toolbar({
         />
       </ToolbarGroup>
       <ToolbarGroup label="ช่วยเหลือ">
-        <ToolButton icon={<Search />} label="ค้นหา" onClick={() => onUnavailableAction('ค้นหา')} />
+        <ToolButton icon={<Search />} label="ค้นหา" disabled={isBusy || !hasDocument} onClick={onRunSearch} />
+        {searchResultSummary ? <div className="search-readout">{searchResultSummary}</div> : null}
         <ToolButton icon={<MousePointer2 />} label="คู่มือ" onClick={() => onUnavailableAction('คู่มือ')} />
       </ToolbarGroup>
     </header>
@@ -542,12 +669,32 @@ function FallbackPage({ selectedPage }: { selectedPage: number }) {
 }
 
 function ToolPanel({
+  activeSearchIndex,
   bridgeStatus,
+  hasDocument,
+  isBusy,
+  onNextSearchResult,
+  onPreviousSearchResult,
+  onRunSearch,
+  onSearchQueryChange,
+  onSelectSearchResult,
   onUnavailableAction,
+  searchQuery,
+  searchResults,
   workerCommands,
 }: {
+  activeSearchIndex: number
   bridgeStatus: BridgeStatus
+  hasDocument: boolean
+  isBusy: boolean
+  onNextSearchResult: () => void
+  onPreviousSearchResult: () => void
+  onRunSearch: () => void
+  onSearchQueryChange: (value: string) => void
+  onSelectSearchResult: (resultIndex: number) => void
   onUnavailableAction: (featureName: string) => void
+  searchQuery: string
+  searchResults: WorkerSearchResult[]
   workerCommands: Array<{ name: WorkerCommandName; state: string }>
 }) {
   return (
@@ -559,6 +706,58 @@ function ToolPanel({
         </div>
         <FileText size={18} />
       </div>
+      <section className="tool-section search-section">
+        <h2>
+          <Search size={16} />
+          ค้นหา
+        </h2>
+        <form
+          className="search-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            onRunSearch()
+          }}
+        >
+          <input
+            aria-label="คำค้นหา"
+            disabled={isBusy || !hasDocument}
+            onChange={(event) => onSearchQueryChange(event.target.value)}
+            placeholder="คำค้นหา"
+            value={searchQuery}
+          />
+          <button className="secondary-action compact-action" disabled={isBusy || !hasDocument} type="submit">
+            ค้นหา
+          </button>
+        </form>
+        {searchResults.length ? (
+          <div className="search-results" aria-label="ผลค้นหา">
+            <div className="search-result-toolbar">
+              <span>
+                ผลค้นหา {activeSearchIndex + 1}/{searchResults.length}
+              </span>
+              <div>
+                <button disabled={isBusy} onClick={onPreviousSearchResult} type="button">
+                  ก่อน
+                </button>
+                <button disabled={isBusy} onClick={onNextSearchResult} type="button">
+                  ถัด
+                </button>
+              </div>
+            </div>
+            {searchResults.slice(0, 8).map((result, resultIndex) => (
+              <button
+                key={`${result.page_index}-${result.match_index}-${resultIndex}`}
+                className={`search-result-row ${resultIndex === activeSearchIndex ? 'is-selected' : ''}`}
+                disabled={isBusy}
+                onClick={() => onSelectSearchResult(resultIndex)}
+                type="button"
+              >
+                <span>{result.label}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </section>
       <section className="tool-section">
         <h2>
           <Type size={16} />

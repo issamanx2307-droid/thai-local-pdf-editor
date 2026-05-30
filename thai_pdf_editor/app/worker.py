@@ -16,6 +16,7 @@ from thai_pdf_editor.app.core.errors import InvalidOperationError
 from thai_pdf_editor.app.core.page_operations import PageOperations
 from thai_pdf_editor.app.core.pdf_document import PdfDocument
 from thai_pdf_editor.app.core.pdf_renderer import PdfRenderer
+from thai_pdf_editor.app.core.pdf_search import search_pdf_text
 from thai_pdf_editor.app.logging_config import setup_logging
 from thai_pdf_editor.app.worker_contract import (
     COMMAND_BATCH,
@@ -26,6 +27,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
     COMMAND_RENDER_PAGE,
+    COMMAND_SEARCH_TEXT,
     error_response,
     state_payload,
     success_response,
@@ -66,6 +68,8 @@ class PdfWorkerSession:
                 return self._duplicate_page(payload)
             if command == COMMAND_DELETE_PAGE:
                 return self._delete_page(payload)
+            if command == COMMAND_SEARCH_TEXT:
+                return self._search_text(payload)
             if command == COMMAND_CLOSE_DOCUMENT:
                 return self._close_document()
             raise InvalidOperationError("คำสั่ง worker ไม่ถูกต้อง", detail=f"unknown command: {command}")
@@ -182,6 +186,29 @@ class PdfWorkerSession:
             {
                 "deleted_page_index": operation.payload.get("deleted_page"),
                 "operation_id": operation.id,
+            },
+        )
+
+    def _search_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        query = str(payload.get("query") or "").strip()
+        results = search_pdf_text(self.document.raw, query)
+        self._set_current_page_or_raise(results[0].page_index)
+        return success_response(
+            COMMAND_SEARCH_TEXT,
+            self.state,
+            {
+                "query": query,
+                "count": len(results),
+                "results": [
+                    {
+                        "page_index": result.page_index,
+                        "match_index": result.match_index,
+                        "rect": list(result.rect),
+                        "label": result.label,
+                    }
+                    for result in results
+                ],
             },
         )
 

@@ -18,6 +18,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
     COMMAND_RENDER_PAGE,
+    COMMAND_SEARCH_TEXT,
 )
 
 from tests.fixtures.create_sample_pdfs import create_sample_pdf
@@ -120,6 +121,27 @@ def test_worker_duplicate_and_delete_page_commands_keep_state_and_source_safe(tm
         assert deleted["state"]["current_page_index"] == 2
         assert deleted["state"]["selected_page_indices"] == [2]
         assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+    finally:
+        session.close()
+
+
+def test_worker_search_text_returns_results_and_selects_first_match(tmp_path) -> None:
+    """Worker search should expose text-layer matches for the React shell."""
+    source_path = create_sample_pdf(tmp_path / "search-source.pdf", pages=3, text_prefix="SearchTarget")
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        assert session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})["ok"] is True
+        searched = session.handle({"command": COMMAND_SEARCH_TEXT, "payload": {"query": "SearchTarget"}})
+
+        assert searched["ok"] is True
+        assert searched["payload"]["query"] == "SearchTarget"
+        assert searched["payload"]["count"] == 3
+        assert searched["payload"]["results"][0]["page_index"] == 0
+        assert searched["payload"]["results"][0]["match_index"] == 1
+        assert searched["payload"]["results"][0]["rect"]
+        assert searched["state"]["current_page_index"] == 0
+        assert searched["state"]["dirty"] is False
     finally:
         session.close()
 
