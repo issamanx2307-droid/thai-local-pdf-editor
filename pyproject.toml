@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thai-pdf-editor"
+version = "1.0.0+local"
+description = "Local-only Thai PDF editor desktop app"
+requires-python = ">=3.11"
+dependencies = [
+    "customtkinter>=5.2",
+    "PyMuPDF>=1.24",
+    "Pillow>=10.0",
+    "tkinterdnd2>=0.4.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
