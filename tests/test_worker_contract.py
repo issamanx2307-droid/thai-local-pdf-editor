@@ -11,6 +11,7 @@ from pathlib import Path
 
 import fitz
 
+from thai_pdf_editor.app import worker as worker_module
 from thai_pdf_editor.app.worker import PdfWorkerSession
 from thai_pdf_editor.app.worker_contract import (
     COMMAND_ADD_HIGHLIGHT_OVERLAY,
@@ -24,9 +25,11 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
     COMMAND_GO_TO_PAGE,
+    COMMAND_LIST_PRINTERS,
     COMMAND_MERGE_PDFS,
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
+    COMMAND_PRINT_PDF,
     COMMAND_RENDER_PAGE,
     COMMAND_SAVE_COPY,
     COMMAND_SEARCH_TEXT,
@@ -293,6 +296,54 @@ def test_worker_merge_pdfs_opens_merged_output_without_changing_sources(tmp_path
         rendered = session.handle({"command": COMMAND_RENDER_PAGE, "payload": {"page_index": 4, "zoom": 1.0}})
         assert rendered["ok"] is True
         assert Path(rendered["payload"]["preview_path"]).exists()
+    finally:
+        session.close()
+
+
+def test_worker_lists_printers_for_react_dialog(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Worker printer discovery should be JSON-safe for the React print dialog."""
+    monkeypatch.setattr(worker_module, "list_printers", lambda: ["Printer A", "Printer B"])
+    monkeypatch.setattr(worker_module, "get_default_printer", lambda: "Printer B")
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        response = session.handle({"command": COMMAND_LIST_PRINTERS})
+
+        assert response["ok"] is True
+        assert response["payload"]["printers"] == ["Printer A", "Printer B"]
+        assert response["payload"]["default_printer"] == "Printer B"
+    finally:
+        session.close()
+
+
+def test_worker_print_pdf_dispatches_working_copy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Worker print should require an open document and dispatch the local working copy."""
+    source_path = create_sample_pdf(tmp_path / "print-source.pdf", pages=1)
+    calls: list[tuple[Path, str, int]] = []
+    monkeypatch.setattr(
+        worker_module,
+        "print_pdf",
+        lambda pdf_path, printer_name, *, copies: calls.append((Path(pdf_path), printer_name, copies)),
+    )
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        opened = session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})
+        working_copy = Path(opened["state"]["working_copy_path"])
+        printed = session.handle(
+            {
+                "command": COMMAND_PRINT_PDF,
+                "payload": {"printer_name": "Printer A", "copies": 2},
+            }
+        )
+
+        assert printed["ok"] is True
+        assert printed["payload"]["printer_name"] == "Printer A"
+        assert printed["payload"]["copies"] == 2
+        assert calls == [(working_copy, "Printer A", 2)]
     finally:
         session.close()
 

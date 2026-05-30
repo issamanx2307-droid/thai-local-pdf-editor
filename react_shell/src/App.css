@@ -641,6 +641,18 @@
   box-shadow: 0 24px 70px rgba(15, 35, 70, 0.24);
 }
 
+.print-dialog {
+  width: min(480px, 100%);
+  max-height: min(520px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid #b8c8df;
+  border-radius: 8px;
+  background: #fbfdff;
+  box-shadow: 0 24px 70px rgba(15, 35, 70, 0.24);
+}
+
 .guide-heading {
   display: flex;
   align-items: center;
@@ -686,6 +698,43 @@
 .icon-action:focus-visible {
   outline: 2px solid #2c73e7;
   outline-offset: 2px;
+}
+
+.icon-action:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.print-content {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.print-field {
+  display: grid;
+  gap: 7px;
+  color: #344862;
+  font: 700 13px/1.2 Tahoma, "Segoe UI", sans-serif;
+}
+
+.print-field select,
+.print-field input {
+  height: 38px;
+  min-width: 0;
+  border: 1px solid #bfd0e8;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #172033;
+  font: 700 13px/1 Tahoma, "Segoe UI", sans-serif;
+  padding: 0 10px;
+}
+
+.dialog-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 2px;
 }
 
 .guide-content {

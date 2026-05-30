@@ -26,6 +26,7 @@ from thai_pdf_editor.app.core.page_operations import PageOperations, merge_pdfs
 from thai_pdf_editor.app.core.pdf_document import PdfDocument
 from thai_pdf_editor.app.core.pdf_renderer import PdfRenderer
 from thai_pdf_editor.app.core.pdf_search import search_pdf_text
+from thai_pdf_editor.app.core.print_operations import get_default_printer, list_printers, print_pdf
 from thai_pdf_editor.app.core.save_manager import SaveManager
 from thai_pdf_editor.app.core.signature_operations import create_visual_signature_image
 from thai_pdf_editor.app.logging_config import setup_logging
@@ -42,9 +43,11 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
     COMMAND_GO_TO_PAGE,
+    COMMAND_LIST_PRINTERS,
     COMMAND_MERGE_PDFS,
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
+    COMMAND_PRINT_PDF,
     COMMAND_RENDER_PAGE,
     COMMAND_SAVE_COPY,
     COMMAND_SEARCH_TEXT,
@@ -83,6 +86,8 @@ class PdfWorkerSession:
                 return self._render_page(payload)
             if command == COMMAND_GO_TO_PAGE:
                 return self._go_to_page(payload)
+            if command == COMMAND_LIST_PRINTERS:
+                return self._list_printers()
             if command == COMMAND_MERGE_PDFS:
                 return self._merge_pdfs(payload)
             if command == COMMAND_MOVE_PAGE:
@@ -107,6 +112,8 @@ class PdfWorkerSession:
                 return self._crop_page(payload)
             if command == COMMAND_SAVE_COPY:
                 return self._save_copy(payload)
+            if command == COMMAND_PRINT_PDF:
+                return self._print_pdf(payload)
             if command == COMMAND_CLOSE_DOCUMENT:
                 return self._close_document()
             raise InvalidOperationError("คำสั่ง worker ไม่ถูกต้อง", detail=f"unknown command: {command}")
@@ -172,6 +179,18 @@ class PdfWorkerSession:
         self._set_current_page_or_raise(page_index)
         return success_response(COMMAND_GO_TO_PAGE, self.state)
 
+    def _list_printers(self) -> dict[str, Any]:
+        printers = list_printers()
+        default_printer = get_default_printer()
+        return success_response(
+            COMMAND_LIST_PRINTERS,
+            self.state,
+            {
+                "printers": printers,
+                "default_printer": default_printer,
+            },
+        )
+
     def _merge_pdfs(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw_paths = payload.get("source_paths") or []
         if not isinstance(raw_paths, list):
@@ -190,6 +209,25 @@ class PdfWorkerSession:
                 "destination_path": str(merged_path),
                 "file_name": merged_path.name,
                 "source_count": len(source_paths),
+            },
+        )
+
+    def _print_pdf(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        printer_name = str(payload.get("printer_name") or "").strip()
+        copies = max(1, min(99, _int_payload(payload, "copies", 1)))
+        source_path = self.state.working_copy_path or self.state.current_file_path
+        if source_path is None:
+            raise InvalidOperationError("ยังไม่ได้เปิดไฟล์ PDF")
+
+        print_pdf(source_path, printer_name, copies=copies)
+        return success_response(
+            COMMAND_PRINT_PDF,
+            self.state,
+            {
+                "printer_name": printer_name,
+                "copies": copies,
+                "source_path": str(source_path),
             },
         )
 

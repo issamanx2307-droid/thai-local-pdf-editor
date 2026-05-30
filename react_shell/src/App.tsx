@@ -53,12 +53,14 @@ const commandNames: WorkerCommandName[] = [
   'open_pdf',
   'render_page',
   'go_to_page',
+  'list_printers',
   'merge_pdfs',
   'move_page',
   'duplicate_page',
   'delete_page',
   'search_text',
   'save_copy',
+  'print_pdf',
 ]
 const demoCommandNames = new Set<WorkerCommandName>(['open_pdf', 'render_page'])
 type BridgeStatus = 'idle' | 'connecting' | 'ready' | 'error'
@@ -119,6 +121,10 @@ function App() {
   const [signatureText, setSignatureText] = useState('ลายเซ็นภาพ')
   const [cropMarginPercent, setCropMarginPercent] = useState('8')
   const [isGuideOpen, setIsGuideOpen] = useState(false)
+  const [isPrintDialogOpen, setIsPrintDialogOpen] = useState(false)
+  const [printers, setPrinters] = useState<string[]>([])
+  const [selectedPrinter, setSelectedPrinter] = useState('')
+  const [printCopies, setPrintCopies] = useState('1')
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const mergePdfInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -583,6 +589,65 @@ function App() {
     [applyResponse, zoomPercent],
   )
 
+  const openPrintDialog = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนพิมพ์')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('list_printers')
+    setStatusMessage('กำลังตรวจเครื่องพิมพ์ในเครื่อง...')
+    try {
+      const response = await callWorker({ command: 'list_printers' })
+      const payloadPrinters = response.payload.printers
+      const printerNames = Array.isArray(payloadPrinters)
+        ? payloadPrinters.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+        : []
+      const defaultPrinter = typeof response.payload.default_printer === 'string' ? response.payload.default_printer : ''
+      setPrinters(printerNames)
+      setSelectedPrinter(defaultPrinter && printerNames.includes(defaultPrinter) ? defaultPrinter : printerNames[0] || '')
+      setPrintCopies('1')
+      setIsPrintDialogOpen(true)
+      setBridgeStatus('ready')
+      setStatusMessage(printerNames.length > 0 ? 'เลือกเครื่องพิมพ์ก่อนส่งงานพิมพ์' : 'ไม่พบเครื่องพิมพ์ในเครื่องนี้')
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'ตรวจเครื่องพิมพ์ไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [hasDocument])
+
+  const closePrintDialog = useCallback(() => {
+    setIsPrintDialogOpen(false)
+    setStatusMessage('ปิดหน้าต่างพิมพ์')
+  }, [])
+
+  const submitPrintJob = useCallback(async () => {
+    if (!selectedPrinter) {
+      setStatusMessage('กรุณาเลือกเครื่องพิมพ์ก่อนพิมพ์')
+      return
+    }
+
+    const parsedCopies = Number.parseInt(printCopies, 10)
+    const copies = Number.isFinite(parsedCopies) ? Math.max(1, Math.min(99, parsedCopies)) : 1
+    setIsBusy(true)
+    setLastCommand('print_pdf')
+    setStatusMessage(`กำลังส่งพิมพ์ → ${selectedPrinter}`)
+    try {
+      await callWorker({ command: 'print_pdf', payload: { printer_name: selectedPrinter, copies } })
+      setBridgeStatus('ready')
+      setIsPrintDialogOpen(false)
+      setStatusMessage(`ส่งคำสั่งพิมพ์แล้ว → ${selectedPrinter}`)
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'ส่งพิมพ์ไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [printCopies, selectedPrinter])
+
   const createSignatureImage = useCallback(async () => {
     const text = signatureText.trim()
     if (!text) {
@@ -696,10 +761,6 @@ function App() {
     }
   }, [applyResponse, cropMarginPercent, hasDocument, selectedPageIndex, zoomPercent])
 
-  const showPendingReactFeature = useCallback((featureName: string) => {
-    setStatusMessage(`${featureName} ยังไม่ได้ต่อใน React shell ใช้ได้ในแอป desktop ตอนนี้`)
-  }, [])
-
   const openGuide = useCallback(() => {
     setIsGuideOpen(true)
     setStatusMessage('เปิดคู่มือการใช้งาน')
@@ -734,11 +795,11 @@ function App() {
         onNextPage={() => void renderPage(Math.min(totalPages - 1, selectedPageIndex + 1))}
         onOpenDemo={loadDemo}
         onPreviousPage={() => void renderPage(Math.max(0, selectedPageIndex - 1))}
+        onPrint={openPrintDialog}
         onRunSearch={() => void runSearch()}
         onSaveCopy={() => void saveCopy()}
         onMergePdfs={() => mergePdfInputRef.current?.click()}
         onOpenGuide={openGuide}
-        onUnavailableAction={showPendingReactFeature}
         onZoomIn={() => void renderPage(selectedPageIndex, Math.min(240, zoomPercent + 10))}
         onZoomOut={() => void renderPage(selectedPageIndex, Math.max(50, zoomPercent - 10))}
       />
@@ -811,6 +872,18 @@ function App() {
         onChange={(event) => void mergePdfFiles(event.currentTarget.files)}
         type="file"
       />
+      {isPrintDialogOpen ? (
+        <PrintDialog
+          copies={printCopies}
+          isBusy={isBusy}
+          printers={printers}
+          selectedPrinter={selectedPrinter}
+          onClose={closePrintDialog}
+          onCopiesChange={setPrintCopies}
+          onPrinterChange={setSelectedPrinter}
+          onSubmit={() => void submitPrintJob()}
+        />
+      ) : null}
       {isGuideOpen ? <GuideDialog onClose={closeGuide} /> : null}
     </main>
   )
@@ -829,11 +902,11 @@ function Toolbar({
   onNextPage,
   onOpenDemo,
   onPreviousPage,
+  onPrint,
   onRunSearch,
   onSaveCopy,
   onMergePdfs,
   onOpenGuide,
-  onUnavailableAction,
   onZoomIn,
   onZoomOut,
 }: {
@@ -849,11 +922,11 @@ function Toolbar({
   onNextPage: () => void
   onOpenDemo: () => void
   onPreviousPage: () => void
+  onPrint: () => void
   onRunSearch: () => void
   onSaveCopy: () => void
   onMergePdfs: () => void
   onOpenGuide: () => void
-  onUnavailableAction: (featureName: string) => void
   onZoomIn: () => void
   onZoomOut: () => void
 }) {
@@ -863,7 +936,7 @@ function Toolbar({
         <ToolButton icon={<FolderOpen />} label="เปิดไฟล์" active disabled={isBusy} onClick={onOpenDemo} />
         <ToolButton icon={<X />} label="ล้างจอ" disabled={isBusy || !hasDocument} onClick={onCloseDocument} />
         <ToolButton icon={<Save />} label="บันทึก" disabled={isBusy || !hasDocument} onClick={onSaveCopy} />
-        <ToolButton icon={<Printer />} label="พิมพ์" onClick={() => onUnavailableAction('พิมพ์')} />
+        <ToolButton icon={<Printer />} label="พิมพ์" disabled={isBusy || !hasDocument} onClick={onPrint} />
       </ToolbarGroup>
       <ToolbarGroup label="แก้ไข">
         <ToolButton icon={<RotateCcw />} label="ย้อนกลับ" muted />
@@ -903,6 +976,86 @@ function Toolbar({
         <ToolButton icon={<MousePointer2 />} label="คู่มือ" onClick={onOpenGuide} />
       </ToolbarGroup>
     </header>
+  )
+}
+
+function PrintDialog({
+  copies,
+  isBusy,
+  printers,
+  selectedPrinter,
+  onClose,
+  onCopiesChange,
+  onPrinterChange,
+  onSubmit,
+}: {
+  copies: string
+  isBusy: boolean
+  printers: string[]
+  selectedPrinter: string
+  onClose: () => void
+  onCopiesChange: (value: string) => void
+  onPrinterChange: (value: string) => void
+  onSubmit: () => void
+}) {
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !isBusy) {
+          onClose()
+        }
+      }}
+      role="presentation"
+    >
+      <section aria-labelledby="print-title" aria-modal="true" className="print-dialog" role="dialog">
+        <div className="guide-heading">
+          <div>
+            <b id="print-title">พิมพ์เอกสาร</b>
+            <span>เลือกเครื่องพิมพ์ในเครื่องก่อนส่งคำสั่ง</span>
+          </div>
+          <button aria-label="ปิดหน้าต่างพิมพ์" className="icon-action" disabled={isBusy} onClick={onClose} type="button">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="print-content">
+          <label className="print-field">
+            <span>เครื่องพิมพ์</span>
+            <select
+              disabled={isBusy || printers.length === 0}
+              onChange={(event) => onPrinterChange(event.currentTarget.value)}
+              value={selectedPrinter}
+            >
+              {printers.length === 0 ? <option value="">ไม่พบเครื่องพิมพ์</option> : null}
+              {printers.map((printer) => (
+                <option key={printer} value={printer}>
+                  {printer}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="print-field">
+            <span>จำนวนชุด</span>
+            <input
+              disabled={isBusy}
+              max="99"
+              min="1"
+              onChange={(event) => onCopiesChange(event.currentTarget.value)}
+              type="number"
+              value={copies}
+            />
+          </label>
+          <div className="dialog-actions">
+            <button className="secondary-action" disabled={isBusy} onClick={onClose} type="button">
+              ยกเลิก
+            </button>
+            <button className="primary-action" disabled={isBusy || !selectedPrinter} onClick={onSubmit} type="button">
+              พิมพ์
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
   )
 }
 
