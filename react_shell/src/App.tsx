@@ -38,7 +38,15 @@ import './App.css'
 const fallbackPages = Array.from({ length: 3 }, (_, index) => index + 1)
 const defaultZoomPercent = 100
 
-const commandNames: WorkerCommandName[] = ['open_pdf', 'render_page', 'go_to_page', 'move_page']
+const commandNames: WorkerCommandName[] = [
+  'open_pdf',
+  'render_page',
+  'go_to_page',
+  'move_page',
+  'duplicate_page',
+  'delete_page',
+]
+const demoCommandNames = new Set<WorkerCommandName>(['open_pdf', 'render_page'])
 type BridgeStatus = 'idle' | 'connecting' | 'ready' | 'error'
 
 function App() {
@@ -55,6 +63,7 @@ function App() {
 
   const totalPages = pages.length
   const selectedPageNumber = selectedPageIndex + 1
+  const hasDocument = Boolean(documentPath)
 
   const applyResponse = useCallback((response: WorkerResponse, renderResponse = lastRenderResponse(response)) => {
     const nextState: WorkerState = renderResponse?.state || response.state
@@ -150,11 +159,77 @@ function App() {
     [applyResponse, selectedPageIndex, totalPages, zoomPercent],
   )
 
+  const duplicateSelectedPage = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนทำซ้ำหน้า')
+      return
+    }
+
+    const duplicatedPageIndex = selectedPageIndex + 1
+    setIsBusy(true)
+    setLastCommand('duplicate_page')
+    setStatusMessage('กำลังทำซ้ำหน้าผ่าน worker...')
+    try {
+      const response = await callWorker({
+        command: 'batch',
+        commands: [
+          { command: 'duplicate_page', payload: { selected_page_index: selectedPageIndex } },
+          { command: 'render_page', payload: { page_index: duplicatedPageIndex, zoom: zoomPercent / 100 } },
+        ],
+      })
+      applyResponse(response)
+      setBridgeStatus('ready')
+      setStatusMessage('ทำซ้ำหน้าแล้ว')
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'ทำซ้ำหน้าไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument, selectedPageIndex, zoomPercent])
+
+  const deleteSelectedPage = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนลบหน้า')
+      return
+    }
+    if (totalPages <= 1) {
+      setStatusMessage('ไม่สามารถลบหน้าสุดท้ายของเอกสารได้')
+      return
+    }
+
+    const nextPageIndex = Math.min(selectedPageIndex, totalPages - 2)
+    setIsBusy(true)
+    setLastCommand('delete_page')
+    setStatusMessage('กำลังลบหน้าผ่าน worker...')
+    try {
+      const response = await callWorker({
+        command: 'batch',
+        commands: [
+          { command: 'delete_page', payload: { selected_page_index: selectedPageIndex } },
+          { command: 'render_page', payload: { page_index: nextPageIndex, zoom: zoomPercent / 100 } },
+        ],
+      })
+      applyResponse(response)
+      setBridgeStatus('ready')
+      setStatusMessage('ลบหน้าแล้ว')
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'ลบหน้าไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument, selectedPageIndex, totalPages, zoomPercent])
+
+  const showPendingReactFeature = useCallback((featureName: string) => {
+    setStatusMessage(`${featureName} ยังไม่ได้ต่อใน React shell ใช้ได้ในแอป desktop ตอนนี้`)
+  }, [])
+
   const workerCommands = useMemo(
     () =>
       commandNames.map((name) => ({
         name,
-        state: lastCommand === name || (lastCommand === 'demo' && name !== 'move_page') ? 'active' : 'ready',
+        state: lastCommand === name || (lastCommand === 'demo' && demoCommandNames.has(name)) ? 'active' : 'ready',
       })),
     [lastCommand],
   )
@@ -162,6 +237,7 @@ function App() {
   return (
     <main className="app-shell">
       <Toolbar
+        hasDocument={hasDocument}
         isBusy={isBusy}
         selectedPage={selectedPageNumber}
         totalPages={totalPages}
@@ -171,14 +247,18 @@ function App() {
         onNextPage={() => void renderPage(Math.min(totalPages - 1, selectedPageIndex + 1))}
         onOpenDemo={loadDemo}
         onPreviousPage={() => void renderPage(Math.max(0, selectedPageIndex - 1))}
+        onUnavailableAction={showPendingReactFeature}
         onZoomIn={() => void renderPage(selectedPageIndex, Math.min(240, zoomPercent + 10))}
         onZoomOut={() => void renderPage(selectedPageIndex, Math.max(50, zoomPercent - 10))}
       />
       <section className="workspace">
         <PagePanel
+          hasDocument={hasDocument}
           isBusy={isBusy}
           pages={pages}
           selectedPageIndex={selectedPageIndex}
+          onDeleteSelectedPage={deleteSelectedPage}
+          onDuplicateSelectedPage={duplicateSelectedPage}
           onMoveSelectedPage={moveSelectedPage}
           onSelectPage={(pageIndex) => void renderPage(pageIndex)}
         />
@@ -190,7 +270,11 @@ function App() {
           statusMessage={statusMessage}
           zoom={zoomPercent}
         />
-        <ToolPanel bridgeStatus={bridgeStatus} workerCommands={workerCommands} />
+        <ToolPanel
+          bridgeStatus={bridgeStatus}
+          onUnavailableAction={showPendingReactFeature}
+          workerCommands={workerCommands}
+        />
       </section>
       <StatusBar
         dirty={dirty}
@@ -205,6 +289,7 @@ function App() {
 }
 
 function Toolbar({
+  hasDocument,
   isBusy,
   selectedPage,
   totalPages,
@@ -214,9 +299,11 @@ function Toolbar({
   onNextPage,
   onOpenDemo,
   onPreviousPage,
+  onUnavailableAction,
   onZoomIn,
   onZoomOut,
 }: {
+  hasDocument: boolean
   isBusy: boolean
   selectedPage: number
   totalPages: number
@@ -226,6 +313,7 @@ function Toolbar({
   onNextPage: () => void
   onOpenDemo: () => void
   onPreviousPage: () => void
+  onUnavailableAction: (featureName: string) => void
   onZoomIn: () => void
   onZoomOut: () => void
 }) {
@@ -233,34 +321,44 @@ function Toolbar({
     <header className="toolbar" aria-label="แถบเครื่องมือแก้ไข PDF">
       <ToolbarGroup label="ไฟล์">
         <ToolButton icon={<FolderOpen />} label="เปิดไฟล์" active disabled={isBusy} onClick={onOpenDemo} />
-        <ToolButton icon={<Save />} label="บันทึก" />
-        <ToolButton icon={<Printer />} label="พิมพ์" />
+        <ToolButton icon={<Save />} label="บันทึก" onClick={() => onUnavailableAction('บันทึก')} />
+        <ToolButton icon={<Printer />} label="พิมพ์" onClick={() => onUnavailableAction('พิมพ์')} />
       </ToolbarGroup>
       <ToolbarGroup label="แก้ไข">
         <ToolButton icon={<RotateCcw />} label="ย้อนกลับ" muted />
         <ToolButton icon={<RotateCw />} label="ทำซ้ำ" muted />
-        <ToolButton icon={<FileDown />} label="รวม PDF" />
+        <ToolButton icon={<FileDown />} label="รวม PDF" onClick={() => onUnavailableAction('รวม PDF')} />
       </ToolbarGroup>
       <ToolbarGroup label="มุมมอง">
-        <ToolButton icon={<ZoomOut />} label="ซูม-" disabled={isBusy} onClick={onZoomOut} />
+        <ToolButton icon={<ZoomOut />} label="ซูม-" disabled={isBusy || !hasDocument} onClick={onZoomOut} />
         <div className="zoom-readout" aria-live="polite">
           {zoom}%
         </div>
-        <ToolButton icon={<ZoomIn />} label="ซูม+" disabled={isBusy} onClick={onZoomIn} />
-        <ToolButton icon={<Maximize2 />} label="พอดีกว้าง" wide disabled={isBusy} onClick={onFitWidth} />
-        <ToolButton icon={<Maximize2 />} label="พอดีบน-ล่าง" wide disabled={isBusy} onClick={onFitHeight} />
+        <ToolButton icon={<ZoomIn />} label="ซูม+" disabled={isBusy || !hasDocument} onClick={onZoomIn} />
+        <ToolButton icon={<Maximize2 />} label="พอดีกว้าง" wide disabled={isBusy || !hasDocument} onClick={onFitWidth} />
+        <ToolButton icon={<Maximize2 />} label="พอดีบน-ล่าง" wide disabled={isBusy || !hasDocument} onClick={onFitHeight} />
       </ToolbarGroup>
       <ToolbarGroup label="ไปที่หน้า">
-        <ToolButton icon={<ArrowLeft />} label="ก่อน" disabled={isBusy || selectedPage <= 1} onClick={onPreviousPage} />
+        <ToolButton
+          icon={<ArrowLeft />}
+          label="ก่อน"
+          disabled={isBusy || !hasDocument || selectedPage <= 1}
+          onClick={onPreviousPage}
+        />
         <div className="page-control" aria-live="polite">
           <span>{selectedPage}</span>
           <small>/ {totalPages}</small>
         </div>
-        <ToolButton icon={<ArrowRight />} label="ถัด" disabled={isBusy || selectedPage >= totalPages} onClick={onNextPage} />
+        <ToolButton
+          icon={<ArrowRight />}
+          label="ถัด"
+          disabled={isBusy || !hasDocument || selectedPage >= totalPages}
+          onClick={onNextPage}
+        />
       </ToolbarGroup>
       <ToolbarGroup label="ช่วยเหลือ">
-        <ToolButton icon={<Search />} label="ค้นหา" />
-        <ToolButton icon={<MousePointer2 />} label="คู่มือ" />
+        <ToolButton icon={<Search />} label="ค้นหา" onClick={() => onUnavailableAction('ค้นหา')} />
+        <ToolButton icon={<MousePointer2 />} label="คู่มือ" onClick={() => onUnavailableAction('คู่มือ')} />
       </ToolbarGroup>
     </header>
   )
@@ -306,15 +404,21 @@ function ToolButton({
 }
 
 function PagePanel({
+  hasDocument,
   isBusy,
   pages,
   selectedPageIndex,
+  onDeleteSelectedPage,
+  onDuplicateSelectedPage,
   onMoveSelectedPage,
   onSelectPage,
 }: {
+  hasDocument: boolean
   isBusy: boolean
   pages: number[]
   selectedPageIndex: number
+  onDeleteSelectedPage: () => void
+  onDuplicateSelectedPage: () => void
   onMoveSelectedPage: (direction: -1 | 1) => void
   onSelectPage: (pageIndex: number) => void
 }) {
@@ -332,7 +436,7 @@ function PagePanel({
           <button
             key={pageIndex}
             className={`page-row ${pageIndex === selectedPageIndex ? 'is-selected' : ''}`}
-            disabled={isBusy}
+            disabled={isBusy || !hasDocument}
             onClick={() => onSelectPage(pageIndex)}
             type="button"
           >
@@ -342,12 +446,16 @@ function PagePanel({
         ))}
       </div>
       <div className="page-actions-grid">
-        <button disabled={isBusy || selectedPageIndex <= 0} onClick={() => onMoveSelectedPage(-1)} type="button">
+        <button
+          disabled={isBusy || !hasDocument || selectedPageIndex <= 0}
+          onClick={() => onMoveSelectedPage(-1)}
+          type="button"
+        >
           <ArrowUp size={16} />
           ขึ้น
         </button>
         <button
-          disabled={isBusy || selectedPageIndex >= pages.length - 1}
+          disabled={isBusy || !hasDocument || selectedPageIndex >= pages.length - 1}
           onClick={() => onMoveSelectedPage(1)}
           type="button"
         >
@@ -355,10 +463,20 @@ function PagePanel({
           ลง
         </button>
       </div>
-      <button className="secondary-action" type="button">
+      <button
+        className="secondary-action"
+        disabled={isBusy || !hasDocument}
+        onClick={onDuplicateSelectedPage}
+        type="button"
+      >
         ทำซ้ำหน้า
       </button>
-      <button className="danger-action" type="button">
+      <button
+        className="danger-action"
+        disabled={isBusy || !hasDocument || pages.length <= 1}
+        onClick={onDeleteSelectedPage}
+        type="button"
+      >
         ลบหน้า
       </button>
     </aside>
@@ -425,9 +543,11 @@ function FallbackPage({ selectedPage }: { selectedPage: number }) {
 
 function ToolPanel({
   bridgeStatus,
+  onUnavailableAction,
   workerCommands,
 }: {
   bridgeStatus: BridgeStatus
+  onUnavailableAction: (featureName: string) => void
   workerCommands: Array<{ name: WorkerCommandName; state: string }>
 }) {
   return (
@@ -449,7 +569,7 @@ function ToolPanel({
           <input defaultValue="16" />
           <button className="color-swatch" type="button" aria-label="สีข้อความ"></button>
         </div>
-        <button className="primary-action" type="button">
+        <button className="primary-action" onClick={() => onUnavailableAction('วางข้อความ')} type="button">
           วางข้อความ
         </button>
       </section>
@@ -458,10 +578,10 @@ function ToolPanel({
           <Image size={16} />
           รูปภาพ / ลายเซ็น
         </h2>
-        <button className="primary-action" type="button">
+        <button className="primary-action" onClick={() => onUnavailableAction('เลือกรูป/ลายเซ็นภาพ')} type="button">
           เลือกรูป/ลายเซ็นภาพ
         </button>
-        <button className="secondary-action" type="button">
+        <button className="secondary-action" onClick={() => onUnavailableAction('สร้างลายเซ็นภาพ')} type="button">
           สร้างลายเซ็นภาพ
         </button>
       </section>
@@ -470,14 +590,14 @@ function ToolPanel({
           <Square size={16} />
           รูปทรง
         </h2>
-        <button className="primary-action" type="button">
+        <button className="primary-action" onClick={() => onUnavailableAction('วาดกล่อง')} type="button">
           <Minus size={16} />
           วาดกล่อง
         </button>
-        <button className="highlight-action" type="button">
+        <button className="highlight-action" onClick={() => onUnavailableAction('Highlight')} type="button">
           Highlight
         </button>
-        <button className="secondary-action" type="button">
+        <button className="secondary-action" onClick={() => onUnavailableAction('Crop หน้า')} type="button">
           <Crop size={15} />
           Crop หน้า
         </button>

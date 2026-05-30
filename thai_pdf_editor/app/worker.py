@@ -20,6 +20,8 @@ from thai_pdf_editor.app.logging_config import setup_logging
 from thai_pdf_editor.app.worker_contract import (
     COMMAND_BATCH,
     COMMAND_CLOSE_DOCUMENT,
+    COMMAND_DELETE_PAGE,
+    COMMAND_DUPLICATE_PAGE,
     COMMAND_GO_TO_PAGE,
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
@@ -60,6 +62,10 @@ class PdfWorkerSession:
                 return self._go_to_page(payload)
             if command == COMMAND_MOVE_PAGE:
                 return self._move_page(payload)
+            if command == COMMAND_DUPLICATE_PAGE:
+                return self._duplicate_page(payload)
+            if command == COMMAND_DELETE_PAGE:
+                return self._delete_page(payload)
             if command == COMMAND_CLOSE_DOCUMENT:
                 return self._close_document()
             raise InvalidOperationError("คำสั่ง worker ไม่ถูกต้อง", detail=f"unknown command: {command}")
@@ -142,6 +148,39 @@ class PdfWorkerSession:
             {
                 "from_page_index": before_index,
                 "to_page_index": self.state.current_page_index,
+                "operation_id": operation.id,
+            },
+        )
+
+    def _duplicate_page(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+        operation = self.page_operations.duplicate_current_page()
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_DUPLICATE_PAGE,
+            self.state,
+            {
+                "source_page_index": operation.payload.get("source_page"),
+                "duplicated_page_index": operation.payload.get("duplicated_page"),
+                "operation_id": operation.id,
+            },
+        )
+
+    def _delete_page(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+        operation = self.page_operations.delete_current_page()
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_DELETE_PAGE,
+            self.state,
+            {
+                "deleted_page_index": operation.payload.get("deleted_page"),
                 "operation_id": operation.id,
             },
         )

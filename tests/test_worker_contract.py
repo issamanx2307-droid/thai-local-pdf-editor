@@ -12,6 +12,8 @@ from pathlib import Path
 from thai_pdf_editor.app.worker import PdfWorkerSession
 from thai_pdf_editor.app.worker_contract import (
     COMMAND_BATCH,
+    COMMAND_DELETE_PAGE,
+    COMMAND_DUPLICATE_PAGE,
     COMMAND_GO_TO_PAGE,
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
@@ -76,6 +78,47 @@ def test_worker_move_page_uses_selected_page_index_when_state_lagged(tmp_path) -
         assert moved["state"]["current_page_index"] == 1
         assert moved["state"]["selected_page_indices"] == [1]
         assert moved["state"]["dirty"] is True
+        assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+    finally:
+        session.close()
+
+
+def test_worker_duplicate_and_delete_page_commands_keep_state_and_source_safe(tmp_path) -> None:
+    """Worker should expose duplicate/delete page operations for the React shell."""
+    source_path = create_sample_pdf(tmp_path / "page-action-source.pdf", pages=3)
+    source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        assert session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})["ok"] is True
+
+        duplicated = session.handle(
+            {
+                "command": COMMAND_DUPLICATE_PAGE,
+                "payload": {"selected_page_index": 1},
+            }
+        )
+
+        assert duplicated["ok"] is True
+        assert duplicated["payload"]["source_page_index"] == 1
+        assert duplicated["payload"]["duplicated_page_index"] == 2
+        assert duplicated["state"]["total_pages"] == 4
+        assert duplicated["state"]["current_page_index"] == 2
+        assert duplicated["state"]["selected_page_indices"] == [2]
+        assert duplicated["state"]["dirty"] is True
+
+        deleted = session.handle(
+            {
+                "command": COMMAND_DELETE_PAGE,
+                "payload": {"selected_page_index": 2},
+            }
+        )
+
+        assert deleted["ok"] is True
+        assert deleted["payload"]["deleted_page_index"] == 2
+        assert deleted["state"]["total_pages"] == 3
+        assert deleted["state"]["current_page_index"] == 2
+        assert deleted["state"]["selected_page_indices"] == [2]
         assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
     finally:
         session.close()

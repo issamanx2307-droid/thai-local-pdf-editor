@@ -11,6 +11,8 @@ from thai_pdf_editor.app.core.errors import AppError
 
 COMMAND_BATCH = "batch"
 COMMAND_CLOSE_DOCUMENT = "close_document"
+COMMAND_DELETE_PAGE = "delete_page"
+COMMAND_DUPLICATE_PAGE = "duplicate_page"
 COMMAND_GO_TO_PAGE = "go_to_page"
 COMMAND_MOVE_PAGE = "move_page"
 COMMAND_OPEN_PDF = "open_pdf"
