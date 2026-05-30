@@ -17,6 +17,7 @@ from thai_pdf_editor.app.core.page_operations import PageOperations
 from thai_pdf_editor.app.core.pdf_document import PdfDocument
 from thai_pdf_editor.app.core.pdf_renderer import PdfRenderer
 from thai_pdf_editor.app.core.pdf_search import search_pdf_text
+from thai_pdf_editor.app.core.save_manager import SaveManager
 from thai_pdf_editor.app.logging_config import setup_logging
 from thai_pdf_editor.app.worker_contract import (
     COMMAND_BATCH,
@@ -27,6 +28,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
     COMMAND_RENDER_PAGE,
+    COMMAND_SAVE_COPY,
     COMMAND_SEARCH_TEXT,
     error_response,
     state_payload,
@@ -42,6 +44,7 @@ class PdfWorkerSession:
         self.document = PdfDocument(self.state)
         self.renderer = PdfRenderer()
         self.page_operations = PageOperations(self.document, self.state)
+        self.save_manager = SaveManager()
         self.preview_dir = preview_dir or TEMP_DIR / "react_worker_previews"
         self.preview_dir.mkdir(parents=True, exist_ok=True)
 
@@ -70,6 +73,8 @@ class PdfWorkerSession:
                 return self._delete_page(payload)
             if command == COMMAND_SEARCH_TEXT:
                 return self._search_text(payload)
+            if command == COMMAND_SAVE_COPY:
+                return self._save_copy(payload)
             if command == COMMAND_CLOSE_DOCUMENT:
                 return self._close_document()
             raise InvalidOperationError("คำสั่ง worker ไม่ถูกต้อง", detail=f"unknown command: {command}")
@@ -212,6 +217,21 @@ class PdfWorkerSession:
             },
         )
 
+    def _save_copy(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        destination_text = str(payload.get("destination_path") or "").strip()
+        destination_path = Path(destination_text) if destination_text else self._default_save_copy_path()
+        saved_path = self.save_manager.save_as(self.document.raw, self.state, destination_path)
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_SAVE_COPY,
+            self.state,
+            {
+                "destination_path": str(saved_path),
+                "file_name": saved_path.name,
+            },
+        )
+
     def _close_document(self) -> dict[str, Any]:
         self.close()
         self.renderer.clear_cache()
@@ -231,6 +251,18 @@ class PdfWorkerSession:
         safe_stem = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in stem)[:48]
         zoom_label = int(round(zoom * 100))
         return self.preview_dir / f"{safe_stem}_p{page_index + 1:04d}_z{zoom_label}_v{self.state.dirty_version}.png"
+
+    def _default_save_copy_path(self) -> Path:
+        stem = Path(str(self.state.current_file_path or "document")).stem
+        safe_stem = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in stem)[:48] or "document"
+        output_dir = TEMP_DIR / "react_bridge_saves"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        candidate = output_dir / f"{safe_stem}_react_saved.pdf"
+        suffix = 1
+        while candidate.exists():
+            candidate = output_dir / f"{safe_stem}_react_saved_{suffix:03d}.pdf"
+            suffix += 1
+        return candidate
 
 
 def run_request(request: dict[str, Any], *, preview_dir: Path | None = None) -> dict[str, Any]:

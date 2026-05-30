@@ -9,6 +9,7 @@ export type WorkerCommandName =
   | 'move_page'
   | 'open_pdf'
   | 'render_page'
+  | 'save_copy'
   | 'search_text'
 
 export type WorkerSearchResult = {

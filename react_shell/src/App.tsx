@@ -47,6 +47,7 @@ const commandNames: WorkerCommandName[] = [
   'duplicate_page',
   'delete_page',
   'search_text',
+  'save_copy',
 ]
 const demoCommandNames = new Set<WorkerCommandName>(['open_pdf', 'render_page'])
 type BridgeStatus = 'idle' | 'connecting' | 'ready' | 'error'
@@ -72,6 +73,17 @@ function isWorkerSearchResult(value: unknown): value is WorkerSearchResult {
     item.rect.every((coordinate) => typeof coordinate === 'number') &&
     typeof item.label === 'string'
   )
+}
+
+function responseFor(response: WorkerResponse, command: WorkerCommandName): WorkerResponse | undefined {
+  if (response.command === command) {
+    return response
+  }
+  return response.responses?.find((item) => item.command === command)
+}
+
+function fileNameFromPath(path: string): string {
+  return path.split(/[\\/]/).pop() || path
 }
 
 function App() {
@@ -259,6 +271,36 @@ function App() {
     }
   }, [applyResponse, hasDocument, selectedPageIndex, totalPages, zoomPercent])
 
+  const saveCopy = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนบันทึก')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('save_copy')
+    setStatusMessage('กำลังบันทึกสำเนา local...')
+    try {
+      const response = await callWorker({
+        command: 'batch',
+        commands: [
+          { command: 'save_copy' },
+          { command: 'render_page', payload: { page_index: selectedPageIndex, zoom: zoomPercent / 100 } },
+        ],
+      })
+      applyResponse(response)
+      setBridgeStatus('ready')
+      const savedPath = responseFor(response, 'save_copy')?.payload.destination_path
+      const savedName = typeof savedPath === 'string' ? fileNameFromPath(savedPath) : 'ไฟล์สำเนา'
+      setStatusMessage(`บันทึกสำเนาแล้ว: ${savedName}`)
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'บันทึกสำเนาไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument, selectedPageIndex, zoomPercent])
+
   const goToSearchResult = useCallback(
     async (resultIndex: number) => {
       if (!searchResults.length) {
@@ -359,6 +401,7 @@ function App() {
         onOpenDemo={loadDemo}
         onPreviousPage={() => void renderPage(Math.max(0, selectedPageIndex - 1))}
         onRunSearch={() => void runSearch()}
+        onSaveCopy={() => void saveCopy()}
         onUnavailableAction={showPendingReactFeature}
         onZoomIn={() => void renderPage(selectedPageIndex, Math.min(240, zoomPercent + 10))}
         onZoomOut={() => void renderPage(selectedPageIndex, Math.max(50, zoomPercent - 10))}
@@ -423,6 +466,7 @@ function Toolbar({
   onOpenDemo,
   onPreviousPage,
   onRunSearch,
+  onSaveCopy,
   onUnavailableAction,
   onZoomIn,
   onZoomOut,
@@ -439,6 +483,7 @@ function Toolbar({
   onOpenDemo: () => void
   onPreviousPage: () => void
   onRunSearch: () => void
+  onSaveCopy: () => void
   onUnavailableAction: (featureName: string) => void
   onZoomIn: () => void
   onZoomOut: () => void
@@ -447,7 +492,7 @@ function Toolbar({
     <header className="toolbar" aria-label="แถบเครื่องมือแก้ไข PDF">
       <ToolbarGroup label="ไฟล์">
         <ToolButton icon={<FolderOpen />} label="เปิดไฟล์" active disabled={isBusy} onClick={onOpenDemo} />
-        <ToolButton icon={<Save />} label="บันทึก" onClick={() => onUnavailableAction('บันทึก')} />
+        <ToolButton icon={<Save />} label="บันทึก" disabled={isBusy || !hasDocument} onClick={onSaveCopy} />
         <ToolButton icon={<Printer />} label="พิมพ์" onClick={() => onUnavailableAction('พิมพ์')} />
       </ToolbarGroup>
       <ToolbarGroup label="แก้ไข">

@@ -17,6 +17,7 @@ COMMAND_GO_TO_PAGE = "go_to_page"
 COMMAND_MOVE_PAGE = "move_page"
 COMMAND_OPEN_PDF = "open_pdf"
 COMMAND_RENDER_PAGE = "render_page"
+COMMAND_SAVE_COPY = "save_copy"
 COMMAND_SEARCH_TEXT = "search_text"
 
 

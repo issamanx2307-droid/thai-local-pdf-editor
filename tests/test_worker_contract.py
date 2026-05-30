@@ -18,6 +18,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
     COMMAND_RENDER_PAGE,
+    COMMAND_SAVE_COPY,
     COMMAND_SEARCH_TEXT,
 )
 
@@ -142,6 +143,33 @@ def test_worker_search_text_returns_results_and_selects_first_match(tmp_path) ->
         assert searched["payload"]["results"][0]["rect"]
         assert searched["state"]["current_page_index"] == 0
         assert searched["state"]["dirty"] is False
+    finally:
+        session.close()
+
+
+def test_worker_save_copy_writes_new_file_and_clears_dirty(tmp_path) -> None:
+    """Worker save should persist a local copy without modifying the source PDF."""
+    source_path = create_sample_pdf(tmp_path / "save-source.pdf", pages=3)
+    source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    output_path = tmp_path / "outputs" / "save-copy.pdf"
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        assert session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})["ok"] is True
+        assert session.handle({"command": COMMAND_DUPLICATE_PAGE, "payload": {"selected_page_index": 1}})["ok"] is True
+        saved = session.handle(
+            {
+                "command": COMMAND_SAVE_COPY,
+                "payload": {"destination_path": str(output_path)},
+            }
+        )
+
+        assert saved["ok"] is True
+        assert saved["payload"]["destination_path"] == str(output_path)
+        assert output_path.exists()
+        assert saved["state"]["total_pages"] == 4
+        assert saved["state"]["dirty"] is False
+        assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
     finally:
         session.close()
 
