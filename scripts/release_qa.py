@@ -17,7 +17,7 @@ LOG_DIR = PROJECT_ROOT / "data" / "logs"
 REPORT_PATH = LOG_DIR / "release_qa_report.json"
 
 SOURCE_EXTENSIONS = {".py", ".md", ".bat", ".ps1", ".toml", ".txt"}
-EXCLUDED_DIRS = {"build", "dist", ".venv", "__pycache__", ".pytest_cache"}
+EXCLUDED_DIRS = {"build", "dist", "node_modules", ".venv", "__pycache__", ".pytest_cache"}
 MAX_SOURCE_LINES = 1000
 MOJIBAKE_MARKERS = {
     chr(0x00E0) + chr(0x00B8),

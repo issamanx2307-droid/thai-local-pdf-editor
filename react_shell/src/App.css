@@ -1,0 +1,461 @@
+.app-shell {
+  height: 100vh;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: #edf2f7;
+  color: #172033;
+  overflow: hidden;
+}
+
+.toolbar {
+  min-height: 82px;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: 4px 14px 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid #cfd9e8;
+  background: #f8fbff;
+}
+
+.toolbar-group {
+  min-width: max-content;
+  display: grid;
+  grid-template-rows: 16px 1fr;
+  gap: 4px;
+}
+
+.toolbar-label {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #465a78;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-button,
+.page-actions-grid button,
+.primary-action,
+.secondary-action,
+.danger-action,
+.highlight-action {
+  height: 54px;
+  border: 1px solid #8aa4cb;
+  border-radius: 7px;
+  background: linear-gradient(#ffffff, #edf4ff);
+  color: #0f56c9;
+  box-shadow: 0 1px 0 #ffffff inset, 0 2px 4px rgba(31, 64, 110, 0.14);
+  font: 700 13px/1.1 Tahoma, "Leelawadee UI", "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.tool-button {
+  width: 70px;
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+}
+
+.tool-button svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 2.2;
+}
+
+.tool-button.is-wide {
+  width: 104px;
+}
+
+.tool-button.is-active,
+.primary-action {
+  background: linear-gradient(#2c73e7, #1756c7);
+  border-color: #1f5fcf;
+  color: #ffffff;
+}
+
+.tool-button.is-muted {
+  color: #91a1b8;
+  border-color: #cdd8e7;
+  background: #f5f8fc;
+  cursor: default;
+}
+
+.tool-button:active,
+.page-actions-grid button:active,
+.primary-action:active,
+.secondary-action:active,
+.danger-action:active,
+.highlight-action:active {
+  transform: translateY(1px);
+  box-shadow: 0 1px 2px rgba(31, 64, 110, 0.16) inset;
+}
+
+.tool-button:disabled:active {
+  transform: none;
+  box-shadow: 0 1px 0 #ffffff inset, 0 2px 4px rgba(31, 64, 110, 0.14);
+}
+
+.zoom-readout,
+.page-control {
+  height: 38px;
+  min-width: 66px;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  border-radius: 7px;
+  background: #eef3fb;
+  color: #0b1220;
+  font: 700 15px/1 Tahoma, "Segoe UI", sans-serif;
+}
+
+.page-control {
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.page-control small {
+  color: #5b6d86;
+  font-size: 13px;
+}
+
+.workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 300px minmax(420px, 1fr) 376px;
+  gap: 12px;
+  padding: 10px 14px;
+  overflow: hidden;
+}
+
+.page-panel,
+.tool-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #cfd9e8;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid #e0e8f4;
+}
+
+.panel-heading div {
+  display: grid;
+  gap: 3px;
+}
+
+.panel-heading b {
+  font-size: 16px;
+}
+
+.panel-heading span {
+  font-size: 12px;
+  color: #60718b;
+}
+
+.page-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+  background: #f2f6fc;
+}
+
+.page-row {
+  width: 100%;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #18243a;
+  font: 500 15px/1 Tahoma, "Leelawadee UI", sans-serif;
+  text-align: left;
+}
+
+.page-row.is-selected {
+  background: #2563d8;
+  color: #ffffff;
+}
+
+.page-row small {
+  padding-right: 6px;
+  font-size: 11px;
+  opacity: 0.82;
+}
+
+.page-actions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px 22px 4px;
+}
+
+.page-actions-grid button,
+.secondary-action,
+.danger-action,
+.highlight-action,
+.primary-action {
+  width: calc(100% - 44px);
+  margin: 6px 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.page-actions-grid button {
+  width: 100%;
+  margin: 0;
+  height: 42px;
+}
+
+.secondary-action {
+  background: #f8fbff;
+}
+
+.danger-action {
+  background: linear-gradient(#f33f46, #d9272f);
+  border-color: #c9252c;
+  color: #ffffff;
+}
+
+.highlight-action {
+  background: linear-gradient(#f59f11, #cf7600);
+  border-color: #c77600;
+  color: #ffffff;
+}
+
+.viewer {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 34px;
+  border: 1px solid #d5deec;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.viewer-stage {
+  min-height: 0;
+  overflow: auto;
+  background:
+    linear-gradient(90deg, #121c2b 0 12%, transparent 12% 88%, #121c2b 88% 100%),
+    #f5f7fb;
+  padding: 0 28px;
+}
+
+.document-page {
+  width: min(890px, 100%);
+  min-height: 1120px;
+  margin: 0 auto;
+  padding: 46px 48px;
+  box-sizing: border-box;
+  background: #ffffff;
+  box-shadow: 0 2px 18px rgba(16, 32, 61, 0.12);
+  transform: scale(var(--viewer-zoom, 1));
+  transform-origin: top center;
+}
+
+.slide-visual {
+  height: 330px;
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #d9eef8, #f7e4b8 55%, #9fb9ca);
+}
+
+.solar-card {
+  position: absolute;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 10px 28px rgba(33, 50, 78, 0.22);
+}
+
+.solar-card.large {
+  left: 48px;
+  top: 64px;
+  width: 42%;
+  height: 160px;
+}
+
+.solar-card.small {
+  right: 64px;
+  top: 46px;
+  width: 32%;
+  height: 190px;
+  transform: rotate(4deg);
+}
+
+.sun {
+  width: 54px;
+  height: 54px;
+  margin: 28px 0 0 44px;
+  border-radius: 50%;
+  background: radial-gradient(#ff3c00, #ffba1a);
+  box-shadow: 0 0 0 14px rgba(255, 176, 24, 0.22);
+}
+
+.panel-grid {
+  position: absolute;
+  right: 28px;
+  bottom: 34px;
+  width: 190px;
+  height: 74px;
+  transform: skew(-18deg);
+  background:
+    linear-gradient(#ffffff55 1px, transparent 1px),
+    linear-gradient(90deg, #ffffff55 1px, transparent 1px),
+    #185bc1;
+  background-size: 38px 18px;
+  border: 4px solid #dceafe;
+}
+
+.panel-grid.compact {
+  left: 32px;
+  top: 42px;
+  width: 190px;
+  height: 96px;
+}
+
+.solar-card span {
+  position: absolute;
+  right: 24px;
+  top: 20px;
+  font-weight: 800;
+  color: #1b4486;
+}
+
+.document-page h1 {
+  margin: 44px 0 20px;
+  color: #053aaf;
+  font: 800 36px/1.2 Tahoma, "Leelawadee UI", sans-serif;
+  text-decoration: underline;
+}
+
+.document-page p {
+  margin: 0;
+  color: #111827;
+  font: 500 32px/1.65 Tahoma, "Leelawadee UI", sans-serif;
+}
+
+.bottom-scrollbar {
+  display: grid;
+  align-items: center;
+  padding: 0 16px;
+  background: #f7faff;
+  border-top: 1px solid #dbe5f3;
+}
+
+.bottom-scrollbar::before {
+  content: "";
+  height: 16px;
+  grid-area: 1 / 1;
+  border-radius: 999px;
+  background: #e5ebf5;
+  border: 1px solid #d4dfef;
+}
+
+.bottom-scrollbar span {
+  width: 52%;
+  height: 16px;
+  grid-area: 1 / 1;
+  border-radius: 999px;
+  background: #2563d8;
+}
+
+.tool-panel {
+  overflow: auto;
+}
+
+.tool-section,
+.worker-card {
+  margin: 0 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid #e1e8f3;
+}
+
+.tool-section h2,
+.worker-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font: 800 15px/1.2 Tahoma, "Segoe UI", sans-serif;
+}
+
+.tool-section input {
+  width: 100%;
+  height: 38px;
+  box-sizing: border-box;
+  border: 1px solid #cbd7e8;
+  border-radius: 6px;
+  padding: 0 10px;
+  font: 500 14px/1 Tahoma, "Segoe UI", sans-serif;
+}
+
+.inline-fields {
+  display: grid;
+  grid-template-columns: 1fr 42px;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.color-swatch {
+  border: 1px solid #111827;
+  border-radius: 6px;
+  background: #111111;
+}
+
+.command-row {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #edf2f8;
+  font: 600 13px/1 ui-monospace, Consolas, monospace;
+}
+
+.command-row small {
+  color: #0d8a45;
+}
+
+.status-bar {
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 28px;
+  align-items: center;
+  padding: 0 16px;
+  border-top: 1px solid #cfd9e8;
+  background: #fbfdff;
+  color: #3e506b;
+  font: 500 12px/1 Tahoma, "Segoe UI", sans-serif;
+}
+
+@media (max-width: 1180px) {
+  .workspace {
+    grid-template-columns: 240px minmax(360px, 1fr);
+  }
+
+  .tool-panel {
+    display: none;
+  }
+}
