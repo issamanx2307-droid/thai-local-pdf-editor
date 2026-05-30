@@ -13,9 +13,11 @@ import fitz
 
 from thai_pdf_editor.app.worker import PdfWorkerSession
 from thai_pdf_editor.app.worker_contract import (
+    COMMAND_ADD_HIGHLIGHT_OVERLAY,
     COMMAND_ADD_TEXT_OVERLAY,
     COMMAND_BATCH,
     COMMAND_DELETE_PAGE,
+    COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
     COMMAND_GO_TO_PAGE,
     COMMAND_MOVE_PAGE,
@@ -220,6 +222,71 @@ def test_worker_add_text_overlay_previews_and_saves_copy(tmp_path) -> None:
 
         with fitz.open(str(output_path)) as saved_pdf:
             assert "React worker text" in saved_pdf[0].get_text()
+    finally:
+        session.close()
+
+
+def test_worker_shape_overlays_preview_and_save_copy(tmp_path) -> None:
+    """Worker shape overlays should preview as pending work and persist on save-copy."""
+    source_path = create_sample_pdf(tmp_path / "shape-overlay-source.pdf", pages=1)
+    source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    output_path = tmp_path / "outputs" / "shape-overlay-output.pdf"
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        assert session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})["ok"] is True
+        rectangle = session.handle(
+            {
+                "command": COMMAND_DRAW_RECTANGLE_OVERLAY,
+                "payload": {
+                    "selected_page_index": 0,
+                    "x": 72,
+                    "y": 144,
+                    "width": 180,
+                    "height": 72,
+                    "color": "#d32f2f",
+                    "line_width": 2,
+                },
+            }
+        )
+        highlight = session.handle(
+            {
+                "command": COMMAND_ADD_HIGHLIGHT_OVERLAY,
+                "payload": {
+                    "selected_page_index": 0,
+                    "x": 80,
+                    "y": 240,
+                    "width": 190,
+                    "height": 44,
+                    "color": "#fff176",
+                },
+            }
+        )
+
+        assert rectangle["ok"] is True
+        assert rectangle["payload"]["rect"] == [72.0, 144.0, 252.0, 216.0]
+        assert highlight["ok"] is True
+        assert highlight["state"]["dirty"] is True
+        assert len(session.state.pending_operations) == 2
+
+        rendered = session.handle({"command": COMMAND_RENDER_PAGE, "payload": {"page_index": 0, "zoom": 1.0}})
+        assert rendered["ok"] is True
+        assert Path(rendered["payload"]["preview_path"]).exists()
+
+        saved = session.handle(
+            {
+                "command": COMMAND_SAVE_COPY,
+                "payload": {"destination_path": str(output_path)},
+            }
+        )
+        assert saved["ok"] is True
+        assert saved["state"]["dirty"] is False
+        assert output_path.exists()
+        assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+
+        with fitz.open(str(output_path)) as saved_pdf:
+            assert saved_pdf.page_count == 1
+            assert len(saved_pdf[0].get_drawings()) >= 2
     finally:
         session.close()
 

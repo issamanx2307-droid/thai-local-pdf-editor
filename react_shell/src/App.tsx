@@ -40,7 +40,9 @@ const fallbackPages = Array.from({ length: 3 }, (_, index) => index + 1)
 const defaultZoomPercent = 100
 
 const commandNames: WorkerCommandName[] = [
+  'add_highlight_overlay',
   'add_text_overlay',
+  'draw_rectangle_overlay',
   'open_pdf',
   'render_page',
   'go_to_page',
@@ -423,6 +425,47 @@ function App() {
     }
   }, [applyResponse, hasDocument, selectedPageIndex, textOverlayFontSize, textOverlayValue, zoomPercent])
 
+  const addShapeOverlay = useCallback(
+    async (command: 'draw_rectangle_overlay' | 'add_highlight_overlay') => {
+      if (!hasDocument) {
+        setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนวางรูปร่าง')
+        return
+      }
+
+      const isHighlight = command === 'add_highlight_overlay'
+      setIsBusy(true)
+      setLastCommand(command)
+      setStatusMessage(isHighlight ? 'กำลังวาง Highlight ผ่าน worker...' : 'กำลังวาดกล่องผ่าน worker...')
+      try {
+        const response = await callWorker({
+          command: 'batch',
+          commands: [
+            {
+              command,
+              payload: {
+                selected_page_index: selectedPageIndex,
+                color: isHighlight ? '#fff176' : '#d32f2f',
+                line_width: 2,
+              },
+            },
+            { command: 'render_page', payload: { page_index: selectedPageIndex, zoom: zoomPercent / 100 } },
+          ],
+        })
+        applyResponse(response)
+        setSearchResults([])
+        setActiveSearchIndex(-1)
+        setBridgeStatus('ready')
+        setStatusMessage(isHighlight ? 'วาง Highlight แล้ว' : 'วาดกล่องแล้ว')
+      } catch (error) {
+        setBridgeStatus('error')
+        setStatusMessage(error instanceof Error ? error.message : isHighlight ? 'วาง Highlight ไม่สำเร็จ' : 'วาดกล่องไม่สำเร็จ')
+      } finally {
+        setIsBusy(false)
+      }
+    },
+    [applyResponse, hasDocument, selectedPageIndex, zoomPercent],
+  )
+
   const showPendingReactFeature = useCallback((featureName: string) => {
     setStatusMessage(`${featureName} ยังไม่ได้ต่อใน React shell ใช้ได้ในแอป desktop ตอนนี้`)
   }, [])
@@ -480,9 +523,11 @@ function App() {
           bridgeStatus={bridgeStatus}
           hasDocument={hasDocument}
           isBusy={isBusy}
+          onAddHighlightOverlay={() => void addShapeOverlay('add_highlight_overlay')}
           onNextSearchResult={() => void goToSearchResult(activeSearchIndex + 1)}
           onPreviousSearchResult={() => void goToSearchResult(activeSearchIndex - 1)}
           onAddTextOverlay={() => void addTextOverlay()}
+          onDrawRectangleOverlay={() => void addShapeOverlay('draw_rectangle_overlay')}
           onRunSearch={() => void runSearch()}
           onSearchQueryChange={setSearchQuery}
           onSelectSearchResult={(resultIndex) => void goToSearchResult(resultIndex)}
@@ -773,7 +818,9 @@ function ToolPanel({
   bridgeStatus,
   hasDocument,
   isBusy,
+  onAddHighlightOverlay,
   onAddTextOverlay,
+  onDrawRectangleOverlay,
   onNextSearchResult,
   onPreviousSearchResult,
   onRunSearch,
@@ -792,7 +839,9 @@ function ToolPanel({
   bridgeStatus: BridgeStatus
   hasDocument: boolean
   isBusy: boolean
+  onAddHighlightOverlay: () => void
   onAddTextOverlay: () => void
+  onDrawRectangleOverlay: () => void
   onNextSearchResult: () => void
   onPreviousSearchResult: () => void
   onRunSearch: () => void
@@ -917,11 +966,11 @@ function ToolPanel({
           <Square size={16} />
           รูปทรง
         </h2>
-        <button className="primary-action" onClick={() => onUnavailableAction('วาดกล่อง')} type="button">
+        <button className="primary-action" disabled={isBusy || !hasDocument} onClick={onDrawRectangleOverlay} type="button">
           <Minus size={16} />
           วาดกล่อง
         </button>
-        <button className="highlight-action" onClick={() => onUnavailableAction('Highlight')} type="button">
+        <button className="highlight-action" disabled={isBusy || !hasDocument} onClick={onAddHighlightOverlay} type="button">
           Highlight
         </button>
         <button className="secondary-action" onClick={() => onUnavailableAction('Crop หน้า')} type="button">

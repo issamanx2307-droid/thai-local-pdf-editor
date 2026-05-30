@@ -1,10 +1,12 @@
 const BRIDGE_BASE_URL = (import.meta.env.VITE_PDF_BRIDGE_URL || 'http://127.0.0.1:5178').replace(/\/$/, '')
 
 export type WorkerCommandName =
+  | 'add_highlight_overlay'
   | 'add_text_overlay'
   | 'batch'
   | 'close_document'
   | 'delete_page'
+  | 'draw_rectangle_overlay'
   | 'duplicate_page'
   | 'go_to_page'
   | 'move_page'

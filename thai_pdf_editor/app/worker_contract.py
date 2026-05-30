@@ -11,8 +11,10 @@ from thai_pdf_editor.app.core.errors import AppError
 
 COMMAND_BATCH = "batch"
 COMMAND_ADD_TEXT_OVERLAY = "add_text_overlay"
+COMMAND_ADD_HIGHLIGHT_OVERLAY = "add_highlight_overlay"
 COMMAND_CLOSE_DOCUMENT = "close_document"
 COMMAND_DELETE_PAGE = "delete_page"
+COMMAND_DRAW_RECTANGLE_OVERLAY = "draw_rectangle_overlay"
 COMMAND_DUPLICATE_PAGE = "duplicate_page"
 COMMAND_GO_TO_PAGE = "go_to_page"
 COMMAND_MOVE_PAGE = "move_page"

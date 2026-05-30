@@ -13,19 +13,28 @@ from thai_pdf_editor.app.config import TEMP_DIR
 from thai_pdf_editor.app.constants import DEFAULT_ZOOM
 from thai_pdf_editor.app.core.document_state import DocumentState
 from thai_pdf_editor.app.core.errors import InvalidOperationError
-from thai_pdf_editor.app.core.overlay_operations import DEFAULT_TEXT_COLOR, create_text_operation
+from thai_pdf_editor.app.core.overlay_operations import (
+    DEFAULT_HIGHLIGHT_COLOR,
+    DEFAULT_SHAPE_COLOR,
+    DEFAULT_TEXT_COLOR,
+    create_highlight_operation,
+    create_rectangle_operation,
+    create_text_operation,
+)
 from thai_pdf_editor.app.core.page_operations import PageOperations
 from thai_pdf_editor.app.core.pdf_document import PdfDocument
 from thai_pdf_editor.app.core.pdf_renderer import PdfRenderer
 from thai_pdf_editor.app.core.pdf_search import search_pdf_text
 from thai_pdf_editor.app.core.save_manager import SaveManager
 from thai_pdf_editor.app.logging_config import setup_logging
-from thai_pdf_editor.app.models.geometry import PdfPoint
+from thai_pdf_editor.app.models.geometry import PdfPoint, PdfRect
 from thai_pdf_editor.app.worker_contract import (
+    COMMAND_ADD_HIGHLIGHT_OVERLAY,
     COMMAND_ADD_TEXT_OVERLAY,
     COMMAND_BATCH,
     COMMAND_CLOSE_DOCUMENT,
     COMMAND_DELETE_PAGE,
+    COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
     COMMAND_GO_TO_PAGE,
     COMMAND_MOVE_PAGE,
@@ -78,6 +87,10 @@ class PdfWorkerSession:
                 return self._search_text(payload)
             if command == COMMAND_ADD_TEXT_OVERLAY:
                 return self._add_text_overlay(payload)
+            if command == COMMAND_DRAW_RECTANGLE_OVERLAY:
+                return self._draw_rectangle_overlay(payload)
+            if command == COMMAND_ADD_HIGHLIGHT_OVERLAY:
+                return self._add_highlight_overlay(payload)
             if command == COMMAND_SAVE_COPY:
                 return self._save_copy(payload)
             if command == COMMAND_CLOSE_DOCUMENT:
@@ -256,6 +269,39 @@ class PdfWorkerSession:
             },
         )
 
+    def _draw_rectangle_overlay(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+
+        operation = create_rectangle_operation(
+            page_index=self.state.current_page_index,
+            rect=self._overlay_rect(payload),
+            color=_color_payload(payload.get("color"), DEFAULT_SHAPE_COLOR),
+            line_width=max(1.0, min(24.0, _float_payload(payload, "line_width", 2.0))),
+        )
+        operation.validate(self.state.total_pages)
+        self.state.record_operation(operation, pending=True)
+        self.renderer.clear_cache()
+        return self._overlay_response(COMMAND_DRAW_RECTANGLE_OVERLAY, operation)
+
+    def _add_highlight_overlay(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+
+        operation = create_highlight_operation(
+            page_index=self.state.current_page_index,
+            rect=self._overlay_rect(payload),
+            color=_color_payload(payload.get("color"), DEFAULT_HIGHLIGHT_COLOR),
+        )
+        operation.validate(self.state.total_pages)
+        self.state.record_operation(operation, pending=True)
+        self.renderer.clear_cache()
+        return self._overlay_response(COMMAND_ADD_HIGHLIGHT_OVERLAY, operation)
+
     def _save_copy(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_document()
         destination_text = str(payload.get("destination_path") or "").strip()
@@ -284,6 +330,33 @@ class PdfWorkerSession:
         if not 0 <= page_index < self.state.total_pages:
             raise InvalidOperationError("เลขหน้าที่เลือกไม่ถูกต้อง")
         self.state.set_current_page(page_index)
+
+    def _overlay_rect(self, payload: dict[str, Any]) -> PdfRect:
+        page = self.document.raw.load_page(self.state.current_page_index)
+        default_width = min(220.0, max(80.0, page.rect.width * 0.36))
+        default_height = min(96.0, max(36.0, page.rect.height * 0.11))
+        default_x = min(72.0, max(24.0, page.rect.width - default_width - 24.0))
+        default_y = min(160.0, max(32.0, page.rect.height - default_height - 32.0))
+        x0 = _float_payload(payload, "x", default_x)
+        y0 = _float_payload(payload, "y", default_y)
+        width = max(8.0, _float_payload(payload, "width", default_width))
+        height = max(8.0, _float_payload(payload, "height", default_height))
+        x1 = min(page.rect.width - 1.0, x0 + width)
+        y1 = min(page.rect.height - 1.0, y0 + height)
+        return PdfRect(x0=x0, y0=y0, x1=x1, y1=y1)
+
+    def _overlay_response(self, command: str, operation: object) -> dict[str, Any]:
+        payload = getattr(operation, "payload", {})
+        rect = payload.get("rect", ()) if isinstance(payload, dict) else ()
+        return success_response(
+            command,
+            self.state,
+            {
+                "operation_id": getattr(operation, "id", ""),
+                "page_index": getattr(operation, "page_index", self.state.current_page_index),
+                "rect": list(rect),
+            },
+        )
 
     def _preview_path(self, *, page_index: int, zoom: float) -> Path:
         stem = Path(str(self.state.current_file_path or "document")).stem
