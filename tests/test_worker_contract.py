@@ -24,6 +24,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_DELETE_PAGE,
     COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
+    COMMAND_EXTRACT_PAGE,
     COMMAND_GO_TO_PAGE,
     COMMAND_LIST_PRINTERS,
     COMMAND_MERGE_PDFS,
@@ -162,6 +163,36 @@ def test_worker_duplicate_and_delete_page_commands_keep_state_and_source_safe(tm
         assert deleted["state"]["current_page_index"] == 2
         assert deleted["state"]["selected_page_indices"] == [2]
         assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+    finally:
+        session.close()
+
+
+def test_worker_extract_page_creates_one_page_output_without_dirtying_source(tmp_path) -> None:
+    """Worker extract should save one selected page without mutating the open document."""
+    source_path = create_sample_pdf(tmp_path / "extract-source.pdf", pages=3)
+    source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    output_path = tmp_path / "outputs" / "extracted.pdf"
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        assert session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})["ok"] is True
+        extracted = session.handle(
+            {
+                "command": COMMAND_EXTRACT_PAGE,
+                "payload": {"selected_page_index": 1, "destination_path": str(output_path)},
+            }
+        )
+
+        assert extracted["ok"] is True
+        assert extracted["payload"]["page_index"] == 1
+        assert extracted["payload"]["destination_path"] == str(output_path)
+        assert extracted["state"]["dirty"] is False
+        assert extracted["state"]["current_page_index"] == 1
+        assert output_path.exists()
+        assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+
+        with fitz.open(str(output_path)) as pdf:
+            assert pdf.page_count == 1
     finally:
         session.close()
 

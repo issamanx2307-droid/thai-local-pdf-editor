@@ -43,6 +43,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_DELETE_PAGE,
     COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
+    COMMAND_EXTRACT_PAGE,
     COMMAND_GO_TO_PAGE,
     COMMAND_LIST_PRINTERS,
     COMMAND_MERGE_PDFS,
@@ -97,6 +98,8 @@ class PdfWorkerSession:
                 return self._move_page(payload)
             if command == COMMAND_DUPLICATE_PAGE:
                 return self._duplicate_page(payload)
+            if command == COMMAND_EXTRACT_PAGE:
+                return self._extract_page(payload)
             if command == COMMAND_DELETE_PAGE:
                 return self._delete_page(payload)
             if command == COMMAND_SEARCH_TEXT:
@@ -307,6 +310,25 @@ class PdfWorkerSession:
                 "source_page_index": operation.payload.get("source_page"),
                 "duplicated_page_index": operation.payload.get("duplicated_page"),
                 "operation_id": operation.id,
+            },
+        )
+
+    def _extract_page(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+
+        destination_text = str(payload.get("destination_path") or "").strip()
+        destination_path = Path(destination_text) if destination_text else self._default_extract_output_path()
+        extracted_path = self.page_operations.extract_current_page(destination_path)
+        return success_response(
+            COMMAND_EXTRACT_PAGE,
+            self.state,
+            {
+                "destination_path": str(extracted_path),
+                "file_name": extracted_path.name,
+                "page_index": self.state.current_page_index,
             },
         )
 
@@ -572,6 +594,19 @@ class PdfWorkerSession:
         suffix = 1
         while candidate.exists():
             candidate = output_dir / f"{safe_stem}_merged_{suffix:03d}.pdf"
+            suffix += 1
+        return candidate
+
+    def _default_extract_output_path(self) -> Path:
+        stem = Path(str(self.state.current_file_path or "document")).stem
+        safe_stem = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in stem)[:48] or "document"
+        output_dir = TEMP_DIR / "react_bridge_extracts"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        page_label = self.state.current_page_index + 1
+        candidate = output_dir / f"{safe_stem}_page_{page_label:04d}.pdf"
+        suffix = 1
+        while candidate.exists():
+            candidate = output_dir / f"{safe_stem}_page_{page_label:04d}_{suffix:03d}.pdf"
             suffix += 1
         return candidate
 

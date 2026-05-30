@@ -57,6 +57,7 @@ const commandNames: WorkerCommandName[] = [
   'merge_pdfs',
   'move_page',
   'duplicate_page',
+  'extract_page',
   'delete_page',
   'search_text',
   'save_copy',
@@ -280,6 +281,33 @@ function App() {
       setIsBusy(false)
     }
   }, [applyResponse, hasDocument, selectedPageIndex, zoomPercent])
+
+  const extractSelectedPage = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนแยกหน้านี้')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('extract_page')
+    setStatusMessage('กำลังแยกหน้านี้ผ่าน worker...')
+    try {
+      const response = await callWorker({
+        command: 'extract_page',
+        payload: { selected_page_index: selectedPageIndex },
+      })
+      applyResponse(response)
+      setBridgeStatus('ready')
+      const extractedPath = response.payload.destination_path
+      const extractedName = typeof extractedPath === 'string' ? fileNameFromPath(extractedPath) : 'ไฟล์แยกหน้า'
+      setStatusMessage(`แยกหน้านี้แล้ว: ${extractedName}`)
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'แยกหน้านี้ไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument, selectedPageIndex])
 
   const deleteSelectedPage = useCallback(async () => {
     if (!hasDocument) {
@@ -861,6 +889,7 @@ function App() {
           selectedPageIndex={selectedPageIndex}
           onDeleteSelectedPage={deleteSelectedPage}
           onDuplicateSelectedPage={duplicateSelectedPage}
+          onExtractSelectedPage={extractSelectedPage}
           onMoveSelectedPage={moveSelectedPage}
           onSelectPage={(pageIndex) => void renderPage(pageIndex)}
         />
@@ -1207,6 +1236,7 @@ function PagePanel({
   selectedPageIndex,
   onDeleteSelectedPage,
   onDuplicateSelectedPage,
+  onExtractSelectedPage,
   onMoveSelectedPage,
   onSelectPage,
 }: {
@@ -1216,6 +1246,7 @@ function PagePanel({
   selectedPageIndex: number
   onDeleteSelectedPage: () => void
   onDuplicateSelectedPage: () => void
+  onExtractSelectedPage: () => void
   onMoveSelectedPage: (direction: -1 | 1) => void
   onSelectPage: (pageIndex: number) => void
 }) {
@@ -1267,6 +1298,14 @@ function PagePanel({
         type="button"
       >
         ทำซ้ำหน้า
+      </button>
+      <button
+        className="secondary-action"
+        disabled={isBusy || !hasDocument}
+        onClick={onExtractSelectedPage}
+        type="button"
+      >
+        แยกหน้านี้
       </button>
       <button
         className="danger-action"

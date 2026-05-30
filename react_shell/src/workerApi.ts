@@ -11,6 +11,7 @@ export type WorkerCommandName =
   | 'delete_page'
   | 'draw_rectangle_overlay'
   | 'duplicate_page'
+  | 'extract_page'
   | 'go_to_page'
   | 'list_printers'
   | 'merge_pdfs'
