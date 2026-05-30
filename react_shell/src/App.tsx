@@ -20,6 +20,7 @@ import {
   Search,
   Square,
   Type,
+  X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
@@ -44,6 +45,7 @@ const commandNames: WorkerCommandName[] = [
   'add_highlight_overlay',
   'add_image_overlay',
   'add_text_overlay',
+  'close_document',
   'crop_page',
   'draw_rectangle_overlay',
   'create_visual_signature',
@@ -124,6 +126,16 @@ function App() {
 
   const applyResponse = useCallback((response: WorkerResponse, renderResponse = lastRenderResponse(response)) => {
     const nextState: WorkerState = renderResponse?.state || response.state
+    if (!nextState.has_document) {
+      setPages(fallbackPages)
+      setSelectedPageIndex(0)
+      setZoomPercent(defaultZoomPercent)
+      setDocumentPath(null)
+      setDirty(false)
+      setPreviewUrl(null)
+      return
+    }
+
     const pageCount = Math.max(1, nextState.total_pages || 1)
     setPages((currentPages) => {
       if (currentPages.length === pageCount) {
@@ -315,6 +327,32 @@ function App() {
       setIsBusy(false)
     }
   }, [applyResponse, hasDocument, selectedPageIndex, zoomPercent])
+
+  const closeDocument = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('ยังไม่ได้เปิดไฟล์ PDF')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('close_document')
+    setStatusMessage('กำลังล้างจอผ่าน worker...')
+    try {
+      const response = await callWorker({ command: 'close_document' })
+      applyResponse(response, response)
+      setSearchResults([])
+      setActiveSearchIndex(-1)
+      setSelectedImagePath(null)
+      setSelectedImageName('')
+      setBridgeStatus('ready')
+      setStatusMessage('ล้างจอแล้ว')
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'ล้างจอไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument])
 
   const goToSearchResult = useCallback(
     async (resultIndex: number) => {
@@ -634,6 +672,7 @@ function App() {
         zoom={zoomPercent}
         onFitHeight={() => void renderPage(selectedPageIndex, 92)}
         onFitWidth={() => void renderPage(selectedPageIndex, 100)}
+        onCloseDocument={() => void closeDocument()}
         onNextPage={() => void renderPage(Math.min(totalPages - 1, selectedPageIndex + 1))}
         onOpenDemo={loadDemo}
         onPreviousPage={() => void renderPage(Math.max(0, selectedPageIndex - 1))}
@@ -717,6 +756,7 @@ function Toolbar({
   zoom,
   onFitHeight,
   onFitWidth,
+  onCloseDocument,
   onNextPage,
   onOpenDemo,
   onPreviousPage,
@@ -734,6 +774,7 @@ function Toolbar({
   zoom: number
   onFitHeight: () => void
   onFitWidth: () => void
+  onCloseDocument: () => void
   onNextPage: () => void
   onOpenDemo: () => void
   onPreviousPage: () => void
@@ -747,6 +788,7 @@ function Toolbar({
     <header className="toolbar" aria-label="แถบเครื่องมือแก้ไข PDF">
       <ToolbarGroup label="ไฟล์">
         <ToolButton icon={<FolderOpen />} label="เปิดไฟล์" active disabled={isBusy} onClick={onOpenDemo} />
+        <ToolButton icon={<X />} label="ล้างจอ" disabled={isBusy || !hasDocument} onClick={onCloseDocument} />
         <ToolButton icon={<Save />} label="บันทึก" disabled={isBusy || !hasDocument} onClick={onSaveCopy} />
         <ToolButton icon={<Printer />} label="พิมพ์" onClick={() => onUnavailableAction('พิมพ์')} />
       </ToolbarGroup>

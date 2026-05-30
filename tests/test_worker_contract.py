@@ -17,6 +17,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_ADD_IMAGE_OVERLAY,
     COMMAND_ADD_TEXT_OVERLAY,
     COMMAND_BATCH,
+    COMMAND_CLOSE_DOCUMENT,
     COMMAND_CROP_PAGE,
     COMMAND_CREATE_VISUAL_SIGNATURE,
     COMMAND_DELETE_PAGE,
@@ -61,6 +62,31 @@ def test_worker_opens_renders_and_navigates_pdf(tmp_path) -> None:
         navigated = session.handle({"command": COMMAND_GO_TO_PAGE, "payload": {"page_index": 1}})
         assert navigated["ok"] is True
         assert navigated["state"]["display_page_number"] == 2
+    finally:
+        session.close()
+
+
+def test_worker_close_document_clears_state_and_working_copy(tmp_path) -> None:
+    """Worker close should reset document state and remove the local working copy."""
+    source_path = create_sample_pdf(tmp_path / "close-source.pdf", pages=2)
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        opened = session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})
+        working_copy_path = Path(opened["state"]["working_copy_path"])
+        assert opened["ok"] is True
+        assert working_copy_path.exists()
+
+        closed = session.handle({"command": COMMAND_CLOSE_DOCUMENT})
+
+        assert closed["ok"] is True
+        assert closed["state"]["has_document"] is False
+        assert closed["state"]["current_file_path"] is None
+        assert closed["state"]["working_copy_path"] is None
+        assert closed["state"]["total_pages"] == 0
+        assert closed["state"]["display_page_number"] == 0
+        assert closed["state"]["dirty"] is False
+        assert not working_copy_path.exists()
     finally:
         session.close()
 
