@@ -17,6 +17,7 @@ data/logs/
 data/temp/
 data/qa/
 data/settings/
+data/signatures/
 
 # User/imported fonts generated at runtime
 assets/fonts/imported/*

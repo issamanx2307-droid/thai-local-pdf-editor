@@ -2,9 +2,11 @@ const BRIDGE_BASE_URL = (import.meta.env.VITE_PDF_BRIDGE_URL || 'http://127.0.0.
 
 export type WorkerCommandName =
   | 'add_highlight_overlay'
+  | 'add_image_overlay'
   | 'add_text_overlay'
   | 'batch'
   | 'close_document'
+  | 'create_visual_signature'
   | 'delete_page'
   | 'draw_rectangle_overlay'
   | 'duplicate_page'
@@ -59,6 +61,12 @@ export type DemoPathResponse = {
   path: string
 }
 
+export type UploadedImageResponse = {
+  ok: boolean
+  path: string
+  file_name: string
+}
+
 export async function getBridgeHealth(): Promise<{ ok: boolean; bridge: string; state: WorkerState }> {
   return fetchJson('/api/health')
 }
@@ -79,6 +87,19 @@ export async function callWorker(request: WorkerRequest): Promise<WorkerResponse
   })
   if (!response.ok) {
     throw new Error(response.error?.message || 'worker ทำงานไม่สำเร็จ')
+  }
+  return response
+}
+
+export async function uploadLocalImage(file: File): Promise<UploadedImageResponse> {
+  const dataUrl = await readFileAsDataUrl(file)
+  const response = await fetchJson<UploadedImageResponse>('/api/upload-image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_name: file.name, data_url: dataUrl }),
+  })
+  if (!response.ok || !response.path) {
+    throw new Error('อัปโหลดรูปภาพเข้า local bridge ไม่สำเร็จ')
   }
   return response
 }
@@ -113,6 +134,21 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(errorMessage(payload) || `bridge request failed: ${response.status}`)
   }
   return payload
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+      } else {
+        reject(new Error('อ่านไฟล์รูปภาพไม่สำเร็จ'))
+      }
+    })
+    reader.addEventListener('error', () => reject(reader.error || new Error('อ่านไฟล์รูปภาพไม่สำเร็จ')))
+    reader.readAsDataURL(file)
+  })
 }
 
 function errorMessage(payload: unknown): string | null {

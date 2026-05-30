@@ -14,8 +14,10 @@ import fitz
 from thai_pdf_editor.app.worker import PdfWorkerSession
 from thai_pdf_editor.app.worker_contract import (
     COMMAND_ADD_HIGHLIGHT_OVERLAY,
+    COMMAND_ADD_IMAGE_OVERLAY,
     COMMAND_ADD_TEXT_OVERLAY,
     COMMAND_BATCH,
+    COMMAND_CREATE_VISUAL_SIGNATURE,
     COMMAND_DELETE_PAGE,
     COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
@@ -287,6 +289,68 @@ def test_worker_shape_overlays_preview_and_save_copy(tmp_path) -> None:
         with fitz.open(str(output_path)) as saved_pdf:
             assert saved_pdf.page_count == 1
             assert len(saved_pdf[0].get_drawings()) >= 2
+    finally:
+        session.close()
+
+
+def test_worker_image_overlay_from_visual_signature_previews_and_save_copy(tmp_path) -> None:
+    """Worker image overlay should accept a local visual signature image and persist it."""
+    source_path = create_sample_pdf(tmp_path / "image-overlay-source.pdf", pages=1)
+    source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    output_path = tmp_path / "outputs" / "image-overlay-output.pdf"
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        assert session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})["ok"] is True
+        signature = session.handle(
+            {
+                "command": COMMAND_CREATE_VISUAL_SIGNATURE,
+                "payload": {"text": "React Signature", "width_px": 420, "color": "#1565c0"},
+            }
+        )
+
+        assert signature["ok"] is True
+        image_path = Path(signature["payload"]["image_path"])
+        assert image_path.exists()
+        assert image_path.suffix.lower() == ".png"
+
+        added = session.handle(
+            {
+                "command": COMMAND_ADD_IMAGE_OVERLAY,
+                "payload": {
+                    "selected_page_index": 0,
+                    "image_path": str(image_path),
+                    "x": 72,
+                    "y": 180,
+                    "width": 120,
+                },
+            }
+        )
+
+        assert added["ok"] is True
+        assert added["payload"]["page_index"] == 0
+        assert added["payload"]["width"] == 120.0
+        assert added["state"]["dirty"] is True
+        assert len(session.state.pending_operations) == 1
+
+        rendered = session.handle({"command": COMMAND_RENDER_PAGE, "payload": {"page_index": 0, "zoom": 1.0}})
+        assert rendered["ok"] is True
+        assert Path(rendered["payload"]["preview_path"]).exists()
+
+        saved = session.handle(
+            {
+                "command": COMMAND_SAVE_COPY,
+                "payload": {"destination_path": str(output_path)},
+            }
+        )
+        assert saved["ok"] is True
+        assert saved["state"]["dirty"] is False
+        assert output_path.exists()
+        assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+
+        with fitz.open(str(output_path)) as saved_pdf:
+            assert saved_pdf.page_count == 1
+            assert saved_pdf[0].get_images(full=True)
     finally:
         session.close()
 

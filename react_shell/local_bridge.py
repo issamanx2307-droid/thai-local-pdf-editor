@@ -8,6 +8,8 @@ current packaged desktop app remains the default Windows PDF handler.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
 import sys
 import threading
@@ -16,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
 import fitz
 
@@ -25,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from thai_pdf_editor.app.config import TEMP_DIR
 from thai_pdf_editor.app.logging_config import setup_logging
+from thai_pdf_editor.app.utils.image_utils import validate_image_path
 from thai_pdf_editor.app.worker import PdfWorkerSession
 from thai_pdf_editor.app.worker_contract import (
     COMMAND_BATCH,
@@ -37,6 +41,8 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5178
 BRIDGE_NAME = "thai-pdf-react-bridge"
 DEFAULT_DEV_ORIGIN = "http://127.0.0.1:5173"
+MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
+UPLOAD_IMAGE_DIR = TEMP_DIR / "react_bridge_uploads"
 ALLOWED_DEV_ORIGINS = {
     DEFAULT_DEV_ORIGIN,
     "http://localhost:5173",
@@ -104,6 +110,15 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         """Handle JSON worker requests from React."""
         parsed = urlparse(self.path)
+        if parsed.path == "/api/upload-image":
+            request = self._read_json()
+            if request is not None:
+                try:
+                    self._send_json(_save_uploaded_image(request))
+                except ValueError as exc:
+                    self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+
         if parsed.path != "/api/worker":
             self._send_error(HTTPStatus.NOT_FOUND, "route not found")
             return
@@ -245,6 +260,47 @@ def _demo_pdf_path() -> Path:
     document.save(str(path))
     document.close()
     return path
+
+
+def _save_uploaded_image(request: dict[str, Any]) -> dict[str, Any]:
+    file_name = str(request.get("file_name") or "uploaded-image").strip()
+    data_url = str(request.get("data_url") or "")
+    mime_type, payload = _split_data_url(data_url)
+    if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+        raise ValueError("รองรับเฉพาะ PNG, JPG/JPEG หรือ WEBP")
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except binascii.Error as exc:
+        raise ValueError("ข้อมูลรูปภาพไม่ถูกต้อง") from exc
+    if not data or len(data) > MAX_UPLOAD_IMAGE_BYTES:
+        raise ValueError("ไฟล์รูปภาพใหญ่เกินไป")
+
+    UPLOAD_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = UPLOAD_IMAGE_DIR / _safe_upload_name(file_name, mime_type)
+    output_path.write_bytes(data)
+    validate_image_path(output_path)
+    return {"ok": True, "path": str(output_path), "file_name": output_path.name}
+
+
+def _split_data_url(data_url: str) -> tuple[str, str]:
+    header, separator, payload = data_url.partition(",")
+    if not separator or not header.startswith("data:") or ";base64" not in header:
+        raise ValueError("ข้อมูลรูปภาพไม่ถูกต้อง")
+    mime_type = header.removeprefix("data:").split(";", maxsplit=1)[0].lower()
+    return mime_type, payload
+
+
+def _safe_upload_name(file_name: str, mime_type: str) -> str:
+    suffix = Path(file_name).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+        suffix = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/webp": ".webp",
+        }[mime_type]
+    stem = Path(file_name).stem or "uploaded-image"
+    safe_stem = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in stem)[:48]
+    return f"{safe_stem or 'uploaded-image'}_{uuid4().hex[:10]}{suffix}"
 
 
 def _with_preview_urls(response: dict[str, Any], preview_dir: Path) -> dict[str, Any]:

@@ -18,6 +18,7 @@ from thai_pdf_editor.app.core.overlay_operations import (
     DEFAULT_SHAPE_COLOR,
     DEFAULT_TEXT_COLOR,
     create_highlight_operation,
+    create_image_operation,
     create_rectangle_operation,
     create_text_operation,
 )
@@ -26,13 +27,16 @@ from thai_pdf_editor.app.core.pdf_document import PdfDocument
 from thai_pdf_editor.app.core.pdf_renderer import PdfRenderer
 from thai_pdf_editor.app.core.pdf_search import search_pdf_text
 from thai_pdf_editor.app.core.save_manager import SaveManager
+from thai_pdf_editor.app.core.signature_operations import create_visual_signature_image
 from thai_pdf_editor.app.logging_config import setup_logging
 from thai_pdf_editor.app.models.geometry import PdfPoint, PdfRect
 from thai_pdf_editor.app.worker_contract import (
     COMMAND_ADD_HIGHLIGHT_OVERLAY,
+    COMMAND_ADD_IMAGE_OVERLAY,
     COMMAND_ADD_TEXT_OVERLAY,
     COMMAND_BATCH,
     COMMAND_CLOSE_DOCUMENT,
+    COMMAND_CREATE_VISUAL_SIGNATURE,
     COMMAND_DELETE_PAGE,
     COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
@@ -91,6 +95,10 @@ class PdfWorkerSession:
                 return self._draw_rectangle_overlay(payload)
             if command == COMMAND_ADD_HIGHLIGHT_OVERLAY:
                 return self._add_highlight_overlay(payload)
+            if command == COMMAND_ADD_IMAGE_OVERLAY:
+                return self._add_image_overlay(payload)
+            if command == COMMAND_CREATE_VISUAL_SIGNATURE:
+                return self._create_visual_signature(payload)
             if command == COMMAND_SAVE_COPY:
                 return self._save_copy(payload)
             if command == COMMAND_CLOSE_DOCUMENT:
@@ -301,6 +309,59 @@ class PdfWorkerSession:
         self.state.record_operation(operation, pending=True)
         self.renderer.clear_cache()
         return self._overlay_response(COMMAND_ADD_HIGHLIGHT_OVERLAY, operation)
+
+    def _add_image_overlay(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+
+        image_path_text = str(payload.get("image_path") or "").strip()
+        if not image_path_text:
+            raise InvalidOperationError("กรุณาเลือกรูปภาพหรือลายเซ็นภาพก่อนวางลง PDF")
+
+        page = self.document.raw.load_page(self.state.current_page_index)
+        width = max(8.0, min(page.rect.width - 24.0, _float_payload(payload, "width", 140.0)))
+        operation = create_image_operation(
+            page_index=self.state.current_page_index,
+            point=PdfPoint(
+                _float_payload(payload, "x", min(72.0, max(24.0, page.rect.width - width - 24.0))),
+                _float_payload(payload, "y", min(220.0, max(32.0, page.rect.height - 96.0))),
+            ),
+            image_path=Path(image_path_text),
+            width=width,
+        )
+        operation.validate(self.state.total_pages)
+        self.state.record_operation(operation, pending=True)
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_ADD_IMAGE_OVERLAY,
+            self.state,
+            {
+                "operation_id": operation.id,
+                "page_index": operation.page_index,
+                "image_path": operation.payload.get("image_path"),
+                "width": operation.payload.get("width"),
+                "height": operation.payload.get("height"),
+            },
+        )
+
+    def _create_visual_signature(self, payload: dict[str, Any]) -> dict[str, Any]:
+        text = str(payload.get("text") or "").strip()
+        width_px = max(240, min(1600, _int_payload(payload, "width_px", 720)))
+        image_path = create_visual_signature_image(
+            text,
+            width_px=width_px,
+            color=_color_payload(payload.get("color"), "#1565c0"),
+        )
+        return success_response(
+            COMMAND_CREATE_VISUAL_SIGNATURE,
+            self.state,
+            {
+                "image_path": str(image_path),
+                "file_name": image_path.name,
+            },
+        )
 
     def _save_copy(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_document()

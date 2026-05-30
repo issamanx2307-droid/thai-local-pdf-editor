@@ -3,13 +3,16 @@
 
 from __future__ import annotations
 
+import base64
 import http.client
+import io
 import json
 import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 
 from react_shell.local_bridge import create_bridge_server
 from thai_pdf_editor.app.worker_contract import (
@@ -81,10 +84,50 @@ def test_react_bridge_health_reports_worker_state(tmp_path) -> None:
         server.server_close()
 
 
+def test_react_bridge_upload_image_saves_valid_local_file(tmp_path) -> None:
+    """Bridge should accept a local image upload and return a validated file path."""
+    server = create_bridge_server(port=0, preview_dir=tmp_path / "previews")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        port = int(server.server_address[1])
+        png_data = _tiny_png_bytes()
+        response = _json_request(
+            port,
+            "POST",
+            "/api/upload-image",
+            {
+                "file_name": "signature.png",
+                "data_url": f"data:image/png;base64,{base64.b64encode(png_data).decode('ascii')}",
+            },
+        )
+
+        assert response["status"] == 200
+        body = response["body"]
+        assert body["ok"] is True
+        image_path = Path(body["path"])
+        assert image_path.exists()
+        assert image_path.suffix.lower() == ".png"
+        assert body["file_name"] == image_path.name
+        assert response["headers"]["Access-Control-Allow-Origin"] == "http://127.0.0.1:5173"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_react_bridge_rejects_non_loopback_bind(tmp_path) -> None:
     """The migration bridge must never bind to all interfaces."""
     with pytest.raises(ValueError, match="127.0.0.1"):
         create_bridge_server(host="0.0.0.0", port=0, preview_dir=tmp_path / "previews")
+
+
+def _tiny_png_bytes() -> bytes:
+    buffer = io.BytesIO()
+    image = Image.new("RGBA", (16, 8), (21, 101, 192, 210))
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def _json_request(port: int, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:

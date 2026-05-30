@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import {
   ArrowDown,
   ArrowLeft,
@@ -29,6 +29,7 @@ import {
   lastRenderResponse,
   openDemoDocument,
   previewUrlFrom,
+  uploadLocalImage,
   type WorkerCommandName,
   type WorkerResponse,
   type WorkerSearchResult,
@@ -41,8 +42,10 @@ const defaultZoomPercent = 100
 
 const commandNames: WorkerCommandName[] = [
   'add_highlight_overlay',
+  'add_image_overlay',
   'add_text_overlay',
   'draw_rectangle_overlay',
+  'create_visual_signature',
   'open_pdf',
   'render_page',
   'go_to_page',
@@ -105,6 +108,11 @@ function App() {
   const [activeSearchIndex, setActiveSearchIndex] = useState(-1)
   const [textOverlayValue, setTextOverlayValue] = useState('')
   const [textOverlayFontSize, setTextOverlayFontSize] = useState('16')
+  const [selectedImagePath, setSelectedImagePath] = useState<string | null>(null)
+  const [selectedImageName, setSelectedImageName] = useState('')
+  const [imageOverlayWidth, setImageOverlayWidth] = useState('140')
+  const [signatureText, setSignatureText] = useState('ลายเซ็นภาพ')
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
 
   const totalPages = pages.length
   const selectedPageNumber = selectedPageIndex + 1
@@ -466,6 +474,102 @@ function App() {
     [applyResponse, hasDocument, selectedPageIndex, zoomPercent],
   )
 
+  const chooseImageFile = useCallback(async (file: File | undefined) => {
+    if (!file) {
+      return
+    }
+
+    setIsBusy(true)
+    setStatusMessage('กำลังนำรูปภาพเข้า local bridge...')
+    try {
+      const uploaded = await uploadLocalImage(file)
+      setSelectedImagePath(uploaded.path)
+      setSelectedImageName(uploaded.file_name)
+      setBridgeStatus('ready')
+      setStatusMessage(`เลือกรูปภาพแล้ว: ${uploaded.file_name}`)
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'เลือกรูปภาพไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [])
+
+  const createSignatureImage = useCallback(async () => {
+    const text = signatureText.trim()
+    if (!text) {
+      setStatusMessage('กรุณากรอกข้อความลายเซ็นภาพ')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('create_visual_signature')
+    setStatusMessage('กำลังสร้างลายเซ็นภาพในเครื่อง...')
+    try {
+      const response = await callWorker({
+        command: 'create_visual_signature',
+        payload: { text, width_px: 720, color: '#1565c0' },
+      })
+      const imagePath = response.payload.image_path
+      const fileName = response.payload.file_name
+      if (typeof imagePath !== 'string') {
+        throw new Error('สร้างลายเซ็นภาพไม่สำเร็จ')
+      }
+      setSelectedImagePath(imagePath)
+      setSelectedImageName(typeof fileName === 'string' ? fileName : fileNameFromPath(imagePath))
+      setBridgeStatus('ready')
+      setStatusMessage(`สร้างลายเซ็นภาพแล้ว: ${typeof fileName === 'string' ? fileName : fileNameFromPath(imagePath)}`)
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'สร้างลายเซ็นภาพไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [signatureText])
+
+  const addImageOverlay = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนวางรูปภาพ')
+      return
+    }
+    if (!selectedImagePath) {
+      setStatusMessage('กรุณาเลือกรูปภาพหรือสร้างลายเซ็นภาพก่อน')
+      return
+    }
+
+    const parsedWidth = Number.parseInt(imageOverlayWidth, 10)
+    const width = Number.isFinite(parsedWidth) ? Math.max(8, Math.min(500, parsedWidth)) : 140
+    setIsBusy(true)
+    setLastCommand('add_image_overlay')
+    setStatusMessage('กำลังวางรูปภาพผ่าน worker...')
+    try {
+      const response = await callWorker({
+        command: 'batch',
+        commands: [
+          {
+            command: 'add_image_overlay',
+            payload: {
+              selected_page_index: selectedPageIndex,
+              image_path: selectedImagePath,
+              width,
+            },
+          },
+          { command: 'render_page', payload: { page_index: selectedPageIndex, zoom: zoomPercent / 100 } },
+        ],
+      })
+      applyResponse(response)
+      setSearchResults([])
+      setActiveSearchIndex(-1)
+      setBridgeStatus('ready')
+      setStatusMessage(`วางรูปภาพแล้ว: ${selectedImageName || fileNameFromPath(selectedImagePath)}`)
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'วางรูปภาพไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument, imageOverlayWidth, selectedImageName, selectedImagePath, selectedPageIndex, zoomPercent])
+
   const showPendingReactFeature = useCallback((featureName: string) => {
     setStatusMessage(`${featureName} ยังไม่ได้ต่อใน React shell ใช้ได้ในแอป desktop ตอนนี้`)
   }, [])
@@ -522,15 +626,24 @@ function App() {
           activeSearchIndex={activeSearchIndex}
           bridgeStatus={bridgeStatus}
           hasDocument={hasDocument}
+          imageInputRef={imageInputRef}
+          imageOverlayWidth={imageOverlayWidth}
           isBusy={isBusy}
+          selectedImageName={selectedImageName}
+          signatureText={signatureText}
           onAddHighlightOverlay={() => void addShapeOverlay('add_highlight_overlay')}
           onNextSearchResult={() => void goToSearchResult(activeSearchIndex + 1)}
           onPreviousSearchResult={() => void goToSearchResult(activeSearchIndex - 1)}
           onAddTextOverlay={() => void addTextOverlay()}
+          onChooseImageFile={chooseImageFile}
+          onCreateSignatureImage={() => void createSignatureImage()}
           onDrawRectangleOverlay={() => void addShapeOverlay('draw_rectangle_overlay')}
+          onImageOverlayWidthChange={setImageOverlayWidth}
+          onPlaceImageOverlay={() => void addImageOverlay()}
           onRunSearch={() => void runSearch()}
           onSearchQueryChange={setSearchQuery}
           onSelectSearchResult={(resultIndex) => void goToSearchResult(resultIndex)}
+          onSignatureTextChange={setSignatureText}
           onTextOverlayChange={setTextOverlayValue}
           onTextOverlayFontSizeChange={setTextOverlayFontSize}
           onUnavailableAction={showPendingReactFeature}
@@ -817,15 +930,24 @@ function ToolPanel({
   activeSearchIndex,
   bridgeStatus,
   hasDocument,
+  imageInputRef,
+  imageOverlayWidth,
   isBusy,
+  selectedImageName,
+  signatureText,
   onAddHighlightOverlay,
   onAddTextOverlay,
+  onChooseImageFile,
+  onCreateSignatureImage,
   onDrawRectangleOverlay,
+  onImageOverlayWidthChange,
   onNextSearchResult,
+  onPlaceImageOverlay,
   onPreviousSearchResult,
   onRunSearch,
   onSearchQueryChange,
   onSelectSearchResult,
+  onSignatureTextChange,
   onTextOverlayChange,
   onTextOverlayFontSizeChange,
   onUnavailableAction,
@@ -838,15 +960,24 @@ function ToolPanel({
   activeSearchIndex: number
   bridgeStatus: BridgeStatus
   hasDocument: boolean
+  imageInputRef: RefObject<HTMLInputElement | null>
+  imageOverlayWidth: string
   isBusy: boolean
+  selectedImageName: string
+  signatureText: string
   onAddHighlightOverlay: () => void
   onAddTextOverlay: () => void
+  onChooseImageFile: (file: File | undefined) => Promise<void>
+  onCreateSignatureImage: () => void
   onDrawRectangleOverlay: () => void
+  onImageOverlayWidthChange: (value: string) => void
   onNextSearchResult: () => void
+  onPlaceImageOverlay: () => void
   onPreviousSearchResult: () => void
   onRunSearch: () => void
   onSearchQueryChange: (value: string) => void
   onSelectSearchResult: (resultIndex: number) => void
+  onSignatureTextChange: (value: string) => void
   onTextOverlayChange: (value: string) => void
   onTextOverlayFontSizeChange: (value: string) => void
   onUnavailableAction: (featureName: string) => void
@@ -954,12 +1085,54 @@ function ToolPanel({
           <Image size={16} />
           รูปภาพ / ลายเซ็น
         </h2>
-        <button className="primary-action" onClick={() => onUnavailableAction('เลือกรูป/ลายเซ็นภาพ')} type="button">
+        <input
+          ref={imageInputRef}
+          accept="image/png,image/jpeg,image/webp"
+          className="file-input"
+          onChange={(event) => {
+            void onChooseImageFile(event.currentTarget.files?.[0])
+            event.currentTarget.value = ''
+          }}
+          type="file"
+        />
+        <p className="image-selection">รูป: {selectedImageName || 'ยังไม่ได้เลือก'}</p>
+        <button
+          className="primary-action"
+          disabled={isBusy}
+          onClick={() => imageInputRef.current?.click()}
+          type="button"
+        >
           เลือกรูป/ลายเซ็นภาพ
         </button>
-        <button className="secondary-action" onClick={() => onUnavailableAction('สร้างลายเซ็นภาพ')} type="button">
+        <input
+          aria-label="ข้อความลายเซ็นภาพ"
+          disabled={isBusy}
+          onChange={(event) => onSignatureTextChange(event.target.value)}
+          placeholder="ข้อความลายเซ็น"
+          value={signatureText}
+        />
+        <button className="secondary-action" disabled={isBusy} onClick={onCreateSignatureImage} type="button">
           สร้างลายเซ็นภาพ
         </button>
+        <div className="inline-fields image-place-fields">
+          <input
+            aria-label="ความกว้างรูปภาพ"
+            disabled={isBusy || !hasDocument}
+            max="500"
+            min="8"
+            onChange={(event) => onImageOverlayWidthChange(event.target.value)}
+            type="number"
+            value={imageOverlayWidth ?? '140'}
+          />
+          <button
+            className="primary-action compact-place-action"
+            disabled={isBusy || !hasDocument || !selectedImageName}
+            onClick={onPlaceImageOverlay}
+            type="button"
+          >
+            วางรูป
+          </button>
+        </div>
       </section>
       <section className="tool-section">
         <h2>
