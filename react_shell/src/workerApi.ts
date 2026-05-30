@@ -12,6 +12,7 @@ export type WorkerCommandName =
   | 'draw_rectangle_overlay'
   | 'duplicate_page'
   | 'go_to_page'
+  | 'merge_pdfs'
   | 'move_page'
   | 'open_pdf'
   | 'render_page'
@@ -68,6 +69,13 @@ export type UploadedImageResponse = {
   file_name: string
 }
 
+export type UploadedPdfResponse = {
+  ok: boolean
+  path: string
+  file_name: string
+  page_count: number
+}
+
 export async function getBridgeHealth(): Promise<{ ok: boolean; bridge: string; state: WorkerState }> {
   return fetchJson('/api/health')
 }
@@ -101,6 +109,19 @@ export async function uploadLocalImage(file: File): Promise<UploadedImageRespons
   })
   if (!response.ok || !response.path) {
     throw new Error('อัปโหลดรูปภาพเข้า local bridge ไม่สำเร็จ')
+  }
+  return response
+}
+
+export async function uploadLocalPdf(file: File): Promise<UploadedPdfResponse> {
+  const dataUrl = await readFileAsDataUrl(file)
+  const response = await fetchJson<UploadedPdfResponse>('/api/upload-pdf', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_name: file.name, data_url: dataUrl }),
+  })
+  if (!response.ok || !response.path) {
+    throw new Error('อัปโหลด PDF เข้า local bridge ไม่สำเร็จ')
   }
   return response
 }

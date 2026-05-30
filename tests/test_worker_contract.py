@@ -24,6 +24,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
     COMMAND_GO_TO_PAGE,
+    COMMAND_MERGE_PDFS,
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
     COMMAND_RENDER_PAGE,
@@ -256,6 +257,42 @@ def test_worker_save_copy_writes_new_file_and_clears_dirty(tmp_path) -> None:
         assert saved["state"]["total_pages"] == 4
         assert saved["state"]["dirty"] is False
         assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+    finally:
+        session.close()
+
+
+def test_worker_merge_pdfs_opens_merged_output_without_changing_sources(tmp_path) -> None:
+    """Worker merge should create a local output and load it for preview."""
+    first = create_sample_pdf(tmp_path / "merge-first.pdf", pages=2)
+    second = create_sample_pdf(tmp_path / "merge-second.pdf", pages=3)
+    first_hash = hashlib.sha256(first.read_bytes()).hexdigest()
+    second_hash = hashlib.sha256(second.read_bytes()).hexdigest()
+    output_path = tmp_path / "outputs" / "merged.pdf"
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        merged = session.handle(
+            {
+                "command": COMMAND_MERGE_PDFS,
+                "payload": {
+                    "source_paths": [str(first), str(second)],
+                    "destination_path": str(output_path),
+                },
+            }
+        )
+
+        assert merged["ok"] is True
+        assert merged["payload"]["source_count"] == 2
+        assert merged["payload"]["destination_path"] == str(output_path)
+        assert merged["state"]["total_pages"] == 5
+        assert merged["state"]["current_page_index"] == 0
+        assert output_path.exists()
+        assert hashlib.sha256(first.read_bytes()).hexdigest() == first_hash
+        assert hashlib.sha256(second.read_bytes()).hexdigest() == second_hash
+
+        rendered = session.handle({"command": COMMAND_RENDER_PAGE, "payload": {"page_index": 4, "zoom": 1.0}})
+        assert rendered["ok"] is True
+        assert Path(rendered["payload"]["preview_path"]).exists()
     finally:
         session.close()
 

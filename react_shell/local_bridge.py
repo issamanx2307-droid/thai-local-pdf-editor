@@ -42,7 +42,9 @@ DEFAULT_PORT = 5178
 BRIDGE_NAME = "thai-pdf-react-bridge"
 DEFAULT_DEV_ORIGIN = "http://127.0.0.1:5173"
 MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_UPLOAD_PDF_BYTES = 80 * 1024 * 1024
 UPLOAD_IMAGE_DIR = TEMP_DIR / "react_bridge_uploads"
+UPLOAD_PDF_DIR = TEMP_DIR / "react_bridge_pdf_uploads"
 ALLOWED_DEV_ORIGINS = {
     DEFAULT_DEV_ORIGIN,
     "http://localhost:5173",
@@ -115,6 +117,15 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
             if request is not None:
                 try:
                     self._send_json(_save_uploaded_image(request))
+                except ValueError as exc:
+                    self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+
+        if parsed.path == "/api/upload-pdf":
+            request = self._read_json()
+            if request is not None:
+                try:
+                    self._send_json(_save_uploaded_pdf(request))
                 except ValueError as exc:
                     self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
             return
@@ -282,6 +293,37 @@ def _save_uploaded_image(request: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "path": str(output_path), "file_name": output_path.name}
 
 
+def _save_uploaded_pdf(request: dict[str, Any]) -> dict[str, Any]:
+    file_name = str(request.get("file_name") or "uploaded.pdf").strip()
+    data_url = str(request.get("data_url") or "")
+    mime_type, payload = _split_data_url(data_url)
+    if mime_type not in {"", "application/octet-stream", "application/pdf", "application/x-pdf"}:
+        raise ValueError("รองรับเฉพาะไฟล์ PDF")
+    if Path(file_name).suffix.lower() != ".pdf":
+        raise ValueError("รองรับเฉพาะไฟล์ PDF")
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except binascii.Error as exc:
+        raise ValueError("ข้อมูลไฟล์ PDF ไม่ถูกต้อง") from exc
+    if not data or len(data) > MAX_UPLOAD_PDF_BYTES:
+        raise ValueError("ไฟล์ PDF ใหญ่เกินไป")
+
+    UPLOAD_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = UPLOAD_PDF_DIR / _safe_pdf_upload_name(file_name)
+    output_path.write_bytes(data)
+    try:
+        with fitz.open(str(output_path)) as document:
+            page_count = document.page_count
+        if page_count <= 0:
+            raise ValueError("ไฟล์ PDF ไม่มีหน้า")
+    except Exception as exc:
+        output_path.unlink(missing_ok=True)
+        if isinstance(exc, ValueError):
+            raise
+        raise ValueError("ไฟล์ PDF ไม่ถูกต้อง") from exc
+    return {"ok": True, "path": str(output_path), "file_name": output_path.name, "page_count": page_count}
+
+
 def _split_data_url(data_url: str) -> tuple[str, str]:
     header, separator, payload = data_url.partition(",")
     if not separator or not header.startswith("data:") or ";base64" not in header:
@@ -301,6 +343,12 @@ def _safe_upload_name(file_name: str, mime_type: str) -> str:
     stem = Path(file_name).stem or "uploaded-image"
     safe_stem = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in stem)[:48]
     return f"{safe_stem or 'uploaded-image'}_{uuid4().hex[:10]}{suffix}"
+
+
+def _safe_pdf_upload_name(file_name: str) -> str:
+    stem = Path(file_name).stem or "uploaded-pdf"
+    safe_stem = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in stem)[:48]
+    return f"{safe_stem or 'uploaded-pdf'}_{uuid4().hex[:10]}.pdf"
 
 
 def _with_preview_urls(response: dict[str, Any], preview_dir: Path) -> dict[str, Any]:

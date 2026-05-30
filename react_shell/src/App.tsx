@@ -31,6 +31,7 @@ import {
   openDemoDocument,
   previewUrlFrom,
   uploadLocalImage,
+  uploadLocalPdf,
   type WorkerCommandName,
   type WorkerResponse,
   type WorkerSearchResult,
@@ -52,6 +53,7 @@ const commandNames: WorkerCommandName[] = [
   'open_pdf',
   'render_page',
   'go_to_page',
+  'merge_pdfs',
   'move_page',
   'duplicate_page',
   'delete_page',
@@ -118,6 +120,7 @@ function App() {
   const [cropMarginPercent, setCropMarginPercent] = useState('8')
   const [isGuideOpen, setIsGuideOpen] = useState(false)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
+  const mergePdfInputRef = useRef<HTMLInputElement | null>(null)
 
   const totalPages = pages.length
   const selectedPageNumber = selectedPageIndex + 1
@@ -536,6 +539,50 @@ function App() {
     }
   }, [])
 
+  const mergePdfFiles = useCallback(
+    async (fileList: FileList | null) => {
+      const files = Array.from(fileList ?? [])
+      if (files.length === 0) {
+        return
+      }
+      if (files.length < 2) {
+        setStatusMessage('กรุณาเลือก PDF อย่างน้อย 2 ไฟล์สำหรับรวม')
+        if (mergePdfInputRef.current) {
+          mergePdfInputRef.current.value = ''
+        }
+        return
+      }
+
+      setIsBusy(true)
+      setLastCommand('merge_pdfs')
+      setStatusMessage(`กำลังรวม PDF ${files.length} ไฟล์ผ่าน worker...`)
+      try {
+        const uploadedFiles = await Promise.all(files.map((file) => uploadLocalPdf(file)))
+        const response = await callWorker({
+          command: 'batch',
+          commands: [
+            { command: 'merge_pdfs', payload: { source_paths: uploadedFiles.map((file) => file.path) } },
+            { command: 'render_page', payload: { page_index: 0, zoom: zoomPercent / 100 } },
+          ],
+        })
+        applyResponse(response)
+        setSearchResults([])
+        setActiveSearchIndex(-1)
+        setBridgeStatus('ready')
+        setStatusMessage(`รวม PDF แล้ว: ${uploadedFiles.length} ไฟล์`)
+      } catch (error) {
+        setBridgeStatus('error')
+        setStatusMessage(error instanceof Error ? error.message : 'รวม PDF ไม่สำเร็จ')
+      } finally {
+        setIsBusy(false)
+        if (mergePdfInputRef.current) {
+          mergePdfInputRef.current.value = ''
+        }
+      }
+    },
+    [applyResponse, zoomPercent],
+  )
+
   const createSignatureImage = useCallback(async () => {
     const text = signatureText.trim()
     if (!text) {
@@ -689,6 +736,7 @@ function App() {
         onPreviousPage={() => void renderPage(Math.max(0, selectedPageIndex - 1))}
         onRunSearch={() => void runSearch()}
         onSaveCopy={() => void saveCopy()}
+        onMergePdfs={() => mergePdfInputRef.current?.click()}
         onOpenGuide={openGuide}
         onUnavailableAction={showPendingReactFeature}
         onZoomIn={() => void renderPage(selectedPageIndex, Math.min(240, zoomPercent + 10))}
@@ -755,6 +803,14 @@ function App() {
         totalPages={totalPages}
         zoom={zoomPercent}
       />
+      <input
+        ref={mergePdfInputRef}
+        accept="application/pdf,.pdf"
+        className="file-input"
+        multiple
+        onChange={(event) => void mergePdfFiles(event.currentTarget.files)}
+        type="file"
+      />
       {isGuideOpen ? <GuideDialog onClose={closeGuide} /> : null}
     </main>
   )
@@ -775,6 +831,7 @@ function Toolbar({
   onPreviousPage,
   onRunSearch,
   onSaveCopy,
+  onMergePdfs,
   onOpenGuide,
   onUnavailableAction,
   onZoomIn,
@@ -794,6 +851,7 @@ function Toolbar({
   onPreviousPage: () => void
   onRunSearch: () => void
   onSaveCopy: () => void
+  onMergePdfs: () => void
   onOpenGuide: () => void
   onUnavailableAction: (featureName: string) => void
   onZoomIn: () => void
@@ -810,7 +868,7 @@ function Toolbar({
       <ToolbarGroup label="แก้ไข">
         <ToolButton icon={<RotateCcw />} label="ย้อนกลับ" muted />
         <ToolButton icon={<RotateCw />} label="ทำซ้ำ" muted />
-        <ToolButton icon={<FileDown />} label="รวม PDF" onClick={() => onUnavailableAction('รวม PDF')} />
+        <ToolButton icon={<FileDown />} label="รวม PDF" disabled={isBusy} onClick={onMergePdfs} />
       </ToolbarGroup>
       <ToolbarGroup label="มุมมอง">
         <ToolButton icon={<ZoomOut />} label="ซูม-" disabled={isBusy || !hasDocument} onClick={onZoomOut} />

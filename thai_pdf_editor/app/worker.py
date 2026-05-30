@@ -22,7 +22,7 @@ from thai_pdf_editor.app.core.overlay_operations import (
     create_rectangle_operation,
     create_text_operation,
 )
-from thai_pdf_editor.app.core.page_operations import PageOperations
+from thai_pdf_editor.app.core.page_operations import PageOperations, merge_pdfs
 from thai_pdf_editor.app.core.pdf_document import PdfDocument
 from thai_pdf_editor.app.core.pdf_renderer import PdfRenderer
 from thai_pdf_editor.app.core.pdf_search import search_pdf_text
@@ -42,6 +42,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
     COMMAND_GO_TO_PAGE,
+    COMMAND_MERGE_PDFS,
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
     COMMAND_RENDER_PAGE,
@@ -82,6 +83,8 @@ class PdfWorkerSession:
                 return self._render_page(payload)
             if command == COMMAND_GO_TO_PAGE:
                 return self._go_to_page(payload)
+            if command == COMMAND_MERGE_PDFS:
+                return self._merge_pdfs(payload)
             if command == COMMAND_MOVE_PAGE:
                 return self._move_page(payload)
             if command == COMMAND_DUPLICATE_PAGE:
@@ -168,6 +171,27 @@ class PdfWorkerSession:
         page_index = _int_payload(payload, "page_index", self.state.current_page_index)
         self._set_current_page_or_raise(page_index)
         return success_response(COMMAND_GO_TO_PAGE, self.state)
+
+    def _merge_pdfs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raw_paths = payload.get("source_paths") or []
+        if not isinstance(raw_paths, list):
+            raise InvalidOperationError("กรุณาเลือก PDF อย่างน้อย 2 ไฟล์สำหรับรวม")
+        source_paths = [Path(str(path_text)) for path_text in raw_paths if str(path_text).strip()]
+        destination_text = str(payload.get("destination_path") or "").strip()
+        destination_path = Path(destination_text) if destination_text else self._default_merge_output_path(source_paths)
+
+        merged_path = merge_pdfs(source_paths, destination_path)
+        self.renderer.clear_cache()
+        self.document.open(merged_path)
+        return success_response(
+            COMMAND_MERGE_PDFS,
+            self.state,
+            {
+                "destination_path": str(merged_path),
+                "file_name": merged_path.name,
+                "source_count": len(source_paths),
+            },
+        )
 
     def _move_page(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_document()
@@ -457,6 +481,18 @@ class PdfWorkerSession:
         suffix = 1
         while candidate.exists():
             candidate = output_dir / f"{safe_stem}_react_saved_{suffix:03d}.pdf"
+            suffix += 1
+        return candidate
+
+    def _default_merge_output_path(self, source_paths: list[Path]) -> Path:
+        stem = source_paths[0].stem if source_paths else "merged"
+        safe_stem = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in stem)[:48] or "merged"
+        output_dir = TEMP_DIR / "react_bridge_merges"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        candidate = output_dir / f"{safe_stem}_merged.pdf"
+        suffix = 1
+        while candidate.exists():
+            candidate = output_dir / f"{safe_stem}_merged_{suffix:03d}.pdf"
             suffix += 1
         return candidate
 
