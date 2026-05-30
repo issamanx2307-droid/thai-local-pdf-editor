@@ -13,13 +13,16 @@ from thai_pdf_editor.app.config import TEMP_DIR
 from thai_pdf_editor.app.constants import DEFAULT_ZOOM
 from thai_pdf_editor.app.core.document_state import DocumentState
 from thai_pdf_editor.app.core.errors import InvalidOperationError
+from thai_pdf_editor.app.core.overlay_operations import DEFAULT_TEXT_COLOR, create_text_operation
 from thai_pdf_editor.app.core.page_operations import PageOperations
 from thai_pdf_editor.app.core.pdf_document import PdfDocument
 from thai_pdf_editor.app.core.pdf_renderer import PdfRenderer
 from thai_pdf_editor.app.core.pdf_search import search_pdf_text
 from thai_pdf_editor.app.core.save_manager import SaveManager
 from thai_pdf_editor.app.logging_config import setup_logging
+from thai_pdf_editor.app.models.geometry import PdfPoint
 from thai_pdf_editor.app.worker_contract import (
+    COMMAND_ADD_TEXT_OVERLAY,
     COMMAND_BATCH,
     COMMAND_CLOSE_DOCUMENT,
     COMMAND_DELETE_PAGE,
@@ -73,6 +76,8 @@ class PdfWorkerSession:
                 return self._delete_page(payload)
             if command == COMMAND_SEARCH_TEXT:
                 return self._search_text(payload)
+            if command == COMMAND_ADD_TEXT_OVERLAY:
+                return self._add_text_overlay(payload)
             if command == COMMAND_SAVE_COPY:
                 return self._save_copy(payload)
             if command == COMMAND_CLOSE_DOCUMENT:
@@ -217,6 +222,40 @@ class PdfWorkerSession:
             },
         )
 
+    def _add_text_overlay(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+
+        page = self.document.raw.load_page(self.state.current_page_index)
+        default_x = max(24.0, min(48.0, page.rect.width - 96.0))
+        default_y = max(32.0, min(72.0, page.rect.height - 48.0))
+        font_size = max(6, min(96, _int_payload(payload, "font_size", 16)))
+        operation = create_text_operation(
+            page_index=self.state.current_page_index,
+            point=PdfPoint(
+                _float_payload(payload, "x", default_x),
+                _float_payload(payload, "y", default_y),
+            ),
+            text=str(payload.get("text") or ""),
+            font_size=font_size,
+            color=_color_payload(payload.get("color"), DEFAULT_TEXT_COLOR),
+            font_path=None,
+        )
+        operation.validate(self.state.total_pages)
+        self.state.record_operation(operation, pending=True)
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_ADD_TEXT_OVERLAY,
+            self.state,
+            {
+                "operation_id": operation.id,
+                "page_index": operation.page_index,
+                "text": operation.payload.get("text"),
+            },
+        )
+
     def _save_copy(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_document()
         destination_text = str(payload.get("destination_path") or "").strip()
@@ -305,6 +344,13 @@ def _int_payload(payload: dict[str, Any], key: str, default: int) -> int:
 def _float_payload(payload: dict[str, Any], key: str, default: float) -> float:
     value = payload.get(key, default)
     return float(value)
+
+
+def _color_payload(value: object, default: str) -> str:
+    clean = str(value or default).strip().lstrip("#")
+    if len(clean) == 6 and all(char in "0123456789abcdefABCDEF" for char in clean):
+        return f"#{clean}"
+    return default
 
 
 if __name__ == "__main__":

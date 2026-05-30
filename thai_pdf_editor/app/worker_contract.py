@@ -10,6 +10,7 @@ from thai_pdf_editor.app.core.document_state import DocumentState
 from thai_pdf_editor.app.core.errors import AppError
 
 COMMAND_BATCH = "batch"
+COMMAND_ADD_TEXT_OVERLAY = "add_text_overlay"
 COMMAND_CLOSE_DOCUMENT = "close_document"
 COMMAND_DELETE_PAGE = "delete_page"
 COMMAND_DUPLICATE_PAGE = "duplicate_page"

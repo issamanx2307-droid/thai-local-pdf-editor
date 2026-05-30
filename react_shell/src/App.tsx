@@ -40,6 +40,7 @@ const fallbackPages = Array.from({ length: 3 }, (_, index) => index + 1)
 const defaultZoomPercent = 100
 
 const commandNames: WorkerCommandName[] = [
+  'add_text_overlay',
   'open_pdf',
   'render_page',
   'go_to_page',
@@ -100,6 +101,8 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<WorkerSearchResult[]>([])
   const [activeSearchIndex, setActiveSearchIndex] = useState(-1)
+  const [textOverlayValue, setTextOverlayValue] = useState('')
+  const [textOverlayFontSize, setTextOverlayFontSize] = useState('16')
 
   const totalPages = pages.length
   const selectedPageNumber = selectedPageIndex + 1
@@ -373,6 +376,53 @@ function App() {
     }
   }, [applyResponse, hasDocument, searchQuery, zoomPercent])
 
+  const addTextOverlay = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนวางข้อความ')
+      return
+    }
+
+    const text = textOverlayValue.trim()
+    if (!text) {
+      setStatusMessage('กรุณากรอกข้อความก่อนวางลง PDF')
+      return
+    }
+
+    const parsedFontSize = Number.parseInt(textOverlayFontSize, 10)
+    const fontSize = Number.isFinite(parsedFontSize) ? Math.max(6, Math.min(96, parsedFontSize)) : 16
+
+    setIsBusy(true)
+    setLastCommand('add_text_overlay')
+    setStatusMessage('กำลังวางข้อความผ่าน worker...')
+    try {
+      const response = await callWorker({
+        command: 'batch',
+        commands: [
+          {
+            command: 'add_text_overlay',
+            payload: {
+              selected_page_index: selectedPageIndex,
+              text,
+              font_size: fontSize,
+              color: '#111111',
+            },
+          },
+          { command: 'render_page', payload: { page_index: selectedPageIndex, zoom: zoomPercent / 100 } },
+        ],
+      })
+      applyResponse(response)
+      setSearchResults([])
+      setActiveSearchIndex(-1)
+      setBridgeStatus('ready')
+      setStatusMessage(`วางข้อความแล้ว: ${text}`)
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'วางข้อความไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument, selectedPageIndex, textOverlayFontSize, textOverlayValue, zoomPercent])
+
   const showPendingReactFeature = useCallback((featureName: string) => {
     setStatusMessage(`${featureName} ยังไม่ได้ต่อใน React shell ใช้ได้ในแอป desktop ตอนนี้`)
   }, [])
@@ -432,12 +482,17 @@ function App() {
           isBusy={isBusy}
           onNextSearchResult={() => void goToSearchResult(activeSearchIndex + 1)}
           onPreviousSearchResult={() => void goToSearchResult(activeSearchIndex - 1)}
+          onAddTextOverlay={() => void addTextOverlay()}
           onRunSearch={() => void runSearch()}
           onSearchQueryChange={setSearchQuery}
           onSelectSearchResult={(resultIndex) => void goToSearchResult(resultIndex)}
+          onTextOverlayChange={setTextOverlayValue}
+          onTextOverlayFontSizeChange={setTextOverlayFontSize}
           onUnavailableAction={showPendingReactFeature}
           searchQuery={searchQuery}
           searchResults={searchResults}
+          textOverlayFontSize={textOverlayFontSize}
+          textOverlayValue={textOverlayValue}
           workerCommands={workerCommands}
         />
       </section>
@@ -718,28 +773,38 @@ function ToolPanel({
   bridgeStatus,
   hasDocument,
   isBusy,
+  onAddTextOverlay,
   onNextSearchResult,
   onPreviousSearchResult,
   onRunSearch,
   onSearchQueryChange,
   onSelectSearchResult,
+  onTextOverlayChange,
+  onTextOverlayFontSizeChange,
   onUnavailableAction,
   searchQuery,
   searchResults,
+  textOverlayFontSize,
+  textOverlayValue,
   workerCommands,
 }: {
   activeSearchIndex: number
   bridgeStatus: BridgeStatus
   hasDocument: boolean
   isBusy: boolean
+  onAddTextOverlay: () => void
   onNextSearchResult: () => void
   onPreviousSearchResult: () => void
   onRunSearch: () => void
   onSearchQueryChange: (value: string) => void
   onSelectSearchResult: (resultIndex: number) => void
+  onTextOverlayChange: (value: string) => void
+  onTextOverlayFontSizeChange: (value: string) => void
   onUnavailableAction: (featureName: string) => void
   searchQuery: string
   searchResults: WorkerSearchResult[]
+  textOverlayFontSize: string
+  textOverlayValue: string
   workerCommands: Array<{ name: WorkerCommandName; state: string }>
 }) {
   return (
@@ -808,12 +873,30 @@ function ToolPanel({
           <Type size={16} />
           ข้อความ
         </h2>
-        <input placeholder="ข้อความ" />
+        <input
+          disabled={isBusy || !hasDocument}
+          onChange={(event) => onTextOverlayChange(event.target.value)}
+          placeholder="ข้อความ"
+          value={textOverlayValue ?? ''}
+        />
         <div className="inline-fields">
-          <input defaultValue="16" />
-          <button className="color-swatch" type="button" aria-label="สีข้อความ"></button>
+          <input
+            aria-label="ขนาดข้อความ"
+            disabled={isBusy || !hasDocument}
+            max="96"
+            min="6"
+            onChange={(event) => onTextOverlayFontSizeChange(event.target.value)}
+            type="number"
+            value={textOverlayFontSize ?? '16'}
+          />
+          <button
+            className="color-swatch"
+            disabled={isBusy || !hasDocument}
+            type="button"
+            aria-label="สีข้อความ"
+          ></button>
         </div>
-        <button className="primary-action" onClick={() => onUnavailableAction('วางข้อความ')} type="button">
+        <button className="primary-action" disabled={isBusy || !hasDocument} onClick={onAddTextOverlay} type="button">
           วางข้อความ
         </button>
       </section>

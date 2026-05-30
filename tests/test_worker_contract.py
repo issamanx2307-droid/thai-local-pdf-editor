@@ -9,8 +9,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import fitz
+
 from thai_pdf_editor.app.worker import PdfWorkerSession
 from thai_pdf_editor.app.worker_contract import (
+    COMMAND_ADD_TEXT_OVERLAY,
     COMMAND_BATCH,
     COMMAND_DELETE_PAGE,
     COMMAND_DUPLICATE_PAGE,
@@ -170,6 +173,53 @@ def test_worker_save_copy_writes_new_file_and_clears_dirty(tmp_path) -> None:
         assert saved["state"]["total_pages"] == 4
         assert saved["state"]["dirty"] is False
         assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+    finally:
+        session.close()
+
+
+def test_worker_add_text_overlay_previews_and_saves_copy(tmp_path) -> None:
+    """Worker text overlay should preview as pending work and persist on save-copy."""
+    source_path = create_sample_pdf(tmp_path / "text-overlay-source.pdf", pages=1)
+    source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    output_path = tmp_path / "outputs" / "text-overlay-output.pdf"
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        assert session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})["ok"] is True
+        added = session.handle(
+            {
+                "command": COMMAND_ADD_TEXT_OVERLAY,
+                "payload": {
+                    "selected_page_index": 0,
+                    "text": "React worker text",
+                    "font_size": 18,
+                    "color": "#111111",
+                },
+            }
+        )
+
+        assert added["ok"] is True
+        assert added["payload"]["page_index"] == 0
+        assert added["state"]["dirty"] is True
+        assert len(session.state.pending_operations) == 1
+
+        rendered = session.handle({"command": COMMAND_RENDER_PAGE, "payload": {"page_index": 0, "zoom": 1.0}})
+        assert rendered["ok"] is True
+        assert Path(rendered["payload"]["preview_path"]).exists()
+
+        saved = session.handle(
+            {
+                "command": COMMAND_SAVE_COPY,
+                "payload": {"destination_path": str(output_path)},
+            }
+        )
+        assert saved["ok"] is True
+        assert saved["state"]["dirty"] is False
+        assert output_path.exists()
+        assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+
+        with fitz.open(str(output_path)) as saved_pdf:
+            assert "React worker text" in saved_pdf[0].get_text()
     finally:
         session.close()
 
