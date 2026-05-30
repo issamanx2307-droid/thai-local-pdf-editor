@@ -6,6 +6,7 @@ export type WorkerCommandName =
   | 'add_text_overlay'
   | 'batch'
   | 'close_document'
+  | 'crop_page'
   | 'create_visual_signature'
   | 'delete_page'
   | 'draw_rectangle_overlay'

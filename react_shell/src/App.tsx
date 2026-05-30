@@ -44,6 +44,7 @@ const commandNames: WorkerCommandName[] = [
   'add_highlight_overlay',
   'add_image_overlay',
   'add_text_overlay',
+  'crop_page',
   'draw_rectangle_overlay',
   'create_visual_signature',
   'open_pdf',
@@ -112,6 +113,7 @@ function App() {
   const [selectedImageName, setSelectedImageName] = useState('')
   const [imageOverlayWidth, setImageOverlayWidth] = useState('140')
   const [signatureText, setSignatureText] = useState('ลายเซ็นภาพ')
+  const [cropMarginPercent, setCropMarginPercent] = useState('8')
   const imageInputRef = useRef<HTMLInputElement | null>(null)
 
   const totalPages = pages.length
@@ -570,6 +572,44 @@ function App() {
     }
   }, [applyResponse, hasDocument, imageOverlayWidth, selectedImageName, selectedImagePath, selectedPageIndex, zoomPercent])
 
+  const cropCurrentPage = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อน Crop หน้า')
+      return
+    }
+
+    const parsedMargin = Number.parseFloat(cropMarginPercent)
+    const marginPercent = Number.isFinite(parsedMargin) ? Math.max(0, Math.min(45, parsedMargin)) : 8
+    setIsBusy(true)
+    setLastCommand('crop_page')
+    setStatusMessage('กำลัง Crop หน้าผ่าน worker...')
+    try {
+      const response = await callWorker({
+        command: 'batch',
+        commands: [
+          {
+            command: 'crop_page',
+            payload: {
+              selected_page_index: selectedPageIndex,
+              margin_percent: marginPercent,
+            },
+          },
+          { command: 'render_page', payload: { page_index: selectedPageIndex, zoom: zoomPercent / 100 } },
+        ],
+      })
+      applyResponse(response)
+      setSearchResults([])
+      setActiveSearchIndex(-1)
+      setBridgeStatus('ready')
+      setStatusMessage(`Crop หน้าแล้ว: ตัดขอบ ${marginPercent}%`)
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'Crop หน้าไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, cropMarginPercent, hasDocument, selectedPageIndex, zoomPercent])
+
   const showPendingReactFeature = useCallback((featureName: string) => {
     setStatusMessage(`${featureName} ยังไม่ได้ต่อใน React shell ใช้ได้ในแอป desktop ตอนนี้`)
   }, [])
@@ -625,6 +665,7 @@ function App() {
         <ToolPanel
           activeSearchIndex={activeSearchIndex}
           bridgeStatus={bridgeStatus}
+          cropMarginPercent={cropMarginPercent}
           hasDocument={hasDocument}
           imageInputRef={imageInputRef}
           imageOverlayWidth={imageOverlayWidth}
@@ -637,7 +678,9 @@ function App() {
           onAddTextOverlay={() => void addTextOverlay()}
           onChooseImageFile={chooseImageFile}
           onCreateSignatureImage={() => void createSignatureImage()}
+          onCropCurrentPage={() => void cropCurrentPage()}
           onDrawRectangleOverlay={() => void addShapeOverlay('draw_rectangle_overlay')}
+          onCropMarginPercentChange={setCropMarginPercent}
           onImageOverlayWidthChange={setImageOverlayWidth}
           onPlaceImageOverlay={() => void addImageOverlay()}
           onRunSearch={() => void runSearch()}
@@ -646,7 +689,6 @@ function App() {
           onSignatureTextChange={setSignatureText}
           onTextOverlayChange={setTextOverlayValue}
           onTextOverlayFontSizeChange={setTextOverlayFontSize}
-          onUnavailableAction={showPendingReactFeature}
           searchQuery={searchQuery}
           searchResults={searchResults}
           textOverlayFontSize={textOverlayFontSize}
@@ -929,6 +971,7 @@ function FallbackPage({ selectedPage }: { selectedPage: number }) {
 function ToolPanel({
   activeSearchIndex,
   bridgeStatus,
+  cropMarginPercent,
   hasDocument,
   imageInputRef,
   imageOverlayWidth,
@@ -939,6 +982,8 @@ function ToolPanel({
   onAddTextOverlay,
   onChooseImageFile,
   onCreateSignatureImage,
+  onCropCurrentPage,
+  onCropMarginPercentChange,
   onDrawRectangleOverlay,
   onImageOverlayWidthChange,
   onNextSearchResult,
@@ -950,7 +995,6 @@ function ToolPanel({
   onSignatureTextChange,
   onTextOverlayChange,
   onTextOverlayFontSizeChange,
-  onUnavailableAction,
   searchQuery,
   searchResults,
   textOverlayFontSize,
@@ -959,6 +1003,7 @@ function ToolPanel({
 }: {
   activeSearchIndex: number
   bridgeStatus: BridgeStatus
+  cropMarginPercent: string
   hasDocument: boolean
   imageInputRef: RefObject<HTMLInputElement | null>
   imageOverlayWidth: string
@@ -969,6 +1014,8 @@ function ToolPanel({
   onAddTextOverlay: () => void
   onChooseImageFile: (file: File | undefined) => Promise<void>
   onCreateSignatureImage: () => void
+  onCropCurrentPage: () => void
+  onCropMarginPercentChange: (value: string) => void
   onDrawRectangleOverlay: () => void
   onImageOverlayWidthChange: (value: string) => void
   onNextSearchResult: () => void
@@ -980,7 +1027,6 @@ function ToolPanel({
   onSignatureTextChange: (value: string) => void
   onTextOverlayChange: (value: string) => void
   onTextOverlayFontSizeChange: (value: string) => void
-  onUnavailableAction: (featureName: string) => void
   searchQuery: string
   searchResults: WorkerSearchResult[]
   textOverlayFontSize: string
@@ -1146,10 +1192,26 @@ function ToolPanel({
         <button className="highlight-action" disabled={isBusy || !hasDocument} onClick={onAddHighlightOverlay} type="button">
           Highlight
         </button>
-        <button className="secondary-action" onClick={() => onUnavailableAction('Crop หน้า')} type="button">
-          <Crop size={15} />
-          Crop หน้า
-        </button>
+        <div className="inline-fields crop-fields">
+          <input
+            aria-label="ระยะขอบ Crop หน้า"
+            disabled={isBusy || !hasDocument}
+            max="45"
+            min="0"
+            onChange={(event) => onCropMarginPercentChange(event.target.value)}
+            type="number"
+            value={cropMarginPercent ?? '8'}
+          />
+          <button
+            className="secondary-action compact-place-action"
+            disabled={isBusy || !hasDocument}
+            onClick={onCropCurrentPage}
+            type="button"
+          >
+            <Crop size={15} />
+            Crop
+          </button>
+        </div>
       </section>
       <section className="worker-card">
         <h2>Worker Commands</h2>

@@ -17,6 +17,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_ADD_IMAGE_OVERLAY,
     COMMAND_ADD_TEXT_OVERLAY,
     COMMAND_BATCH,
+    COMMAND_CROP_PAGE,
     COMMAND_CREATE_VISUAL_SIGNATURE,
     COMMAND_DELETE_PAGE,
     COMMAND_DRAW_RECTANGLE_OVERLAY,
@@ -129,6 +130,58 @@ def test_worker_duplicate_and_delete_page_commands_keep_state_and_source_safe(tm
         assert deleted["state"]["current_page_index"] == 2
         assert deleted["state"]["selected_page_indices"] == [2]
         assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+    finally:
+        session.close()
+
+
+def test_worker_crop_page_previews_and_saves_copy_without_changing_source(tmp_path) -> None:
+    """Worker crop should mutate only the working copy and persist through save-copy."""
+    source_path = create_sample_pdf(tmp_path / "crop-source.pdf", pages=1)
+    source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    output_path = tmp_path / "outputs" / "crop-output.pdf"
+    with fitz.open(str(source_path)) as source_pdf:
+        original_cropbox = tuple(source_pdf[0].cropbox)
+        original_width = source_pdf[0].cropbox.width
+        original_height = source_pdf[0].cropbox.height
+
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        assert session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})["ok"] is True
+        cropped = session.handle(
+            {
+                "command": COMMAND_CROP_PAGE,
+                "payload": {"selected_page_index": 0, "margin_percent": 10},
+            }
+        )
+
+        assert cropped["ok"] is True
+        assert cropped["payload"]["before_cropbox"] == list(original_cropbox)
+        assert cropped["state"]["dirty"] is True
+        assert cropped["state"]["current_page_index"] == 0
+        assert cropped["payload"]["after_cropbox"][2] - cropped["payload"]["after_cropbox"][0] < original_width
+        assert cropped["payload"]["after_cropbox"][3] - cropped["payload"]["after_cropbox"][1] < original_height
+
+        rendered = session.handle({"command": COMMAND_RENDER_PAGE, "payload": {"page_index": 0, "zoom": 1.0}})
+        assert rendered["ok"] is True
+        assert Path(rendered["payload"]["preview_path"]).exists()
+
+        saved = session.handle(
+            {
+                "command": COMMAND_SAVE_COPY,
+                "payload": {"destination_path": str(output_path)},
+            }
+        )
+        assert saved["ok"] is True
+        assert saved["state"]["dirty"] is False
+        assert output_path.exists()
+        assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+
+        with fitz.open(str(output_path)) as saved_pdf:
+            assert saved_pdf[0].cropbox.width < original_width
+            assert saved_pdf[0].cropbox.height < original_height
+        with fitz.open(str(source_path)) as source_pdf:
+            assert tuple(source_pdf[0].cropbox) == original_cropbox
     finally:
         session.close()
 

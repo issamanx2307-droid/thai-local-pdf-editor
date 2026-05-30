@@ -36,6 +36,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_ADD_TEXT_OVERLAY,
     COMMAND_BATCH,
     COMMAND_CLOSE_DOCUMENT,
+    COMMAND_CROP_PAGE,
     COMMAND_CREATE_VISUAL_SIGNATURE,
     COMMAND_DELETE_PAGE,
     COMMAND_DRAW_RECTANGLE_OVERLAY,
@@ -99,6 +100,8 @@ class PdfWorkerSession:
                 return self._add_image_overlay(payload)
             if command == COMMAND_CREATE_VISUAL_SIGNATURE:
                 return self._create_visual_signature(payload)
+            if command == COMMAND_CROP_PAGE:
+                return self._crop_page(payload)
             if command == COMMAND_SAVE_COPY:
                 return self._save_copy(payload)
             if command == COMMAND_CLOSE_DOCUMENT:
@@ -363,6 +366,26 @@ class PdfWorkerSession:
             },
         )
 
+    def _crop_page(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+
+        page = self.document.raw.load_page(self.state.current_page_index)
+        operation = self.page_operations.crop_current_page(_crop_rect_from_payload(page.rect, payload))
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_CROP_PAGE,
+            self.state,
+            {
+                "operation_id": operation.id,
+                "page_index": operation.page_index,
+                "before_cropbox": list(operation.payload.get("before_cropbox", ())),
+                "after_cropbox": list(operation.payload.get("after_cropbox", ())),
+            },
+        )
+
     def _save_copy(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_document()
         destination_text = str(payload.get("destination_path") or "").strip()
@@ -468,6 +491,25 @@ def _load_request(args: argparse.Namespace) -> dict[str, Any]:
     if args.request_file:
         return json.loads(Path(args.request_file).read_text(encoding="utf-8"))
     return json.loads(sys.stdin.read())
+
+
+def _crop_rect_from_payload(page_rect: Any, payload: dict[str, Any]) -> PdfRect:
+    if any(key in payload for key in ("x", "y", "width", "height")):
+        x0 = _float_payload(payload, "x", float(page_rect.x0))
+        y0 = _float_payload(payload, "y", float(page_rect.y0))
+        width = max(20.0, _float_payload(payload, "width", float(page_rect.width)))
+        height = max(20.0, _float_payload(payload, "height", float(page_rect.height)))
+        return PdfRect(x0=x0, y0=y0, x1=x0 + width, y1=y0 + height)
+
+    margin_percent = max(0.0, min(45.0, _float_payload(payload, "margin_percent", 8.0)))
+    margin_x = float(page_rect.width) * margin_percent / 100.0
+    margin_y = float(page_rect.height) * margin_percent / 100.0
+    return PdfRect(
+        x0=float(page_rect.x0) + margin_x,
+        y0=float(page_rect.y0) + margin_y,
+        x1=float(page_rect.x1) - margin_x,
+        y1=float(page_rect.y1) - margin_y,
+    )
 
 
 def _int_payload(payload: dict[str, Any], key: str, default: int) -> int:
