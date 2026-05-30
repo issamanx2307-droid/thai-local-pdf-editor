@@ -116,6 +116,7 @@ function App() {
   const [imageOverlayWidth, setImageOverlayWidth] = useState('140')
   const [signatureText, setSignatureText] = useState('ลายเซ็นภาพ')
   const [cropMarginPercent, setCropMarginPercent] = useState('8')
+  const [isGuideOpen, setIsGuideOpen] = useState(false)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
 
   const totalPages = pages.length
@@ -652,6 +653,16 @@ function App() {
     setStatusMessage(`${featureName} ยังไม่ได้ต่อใน React shell ใช้ได้ในแอป desktop ตอนนี้`)
   }, [])
 
+  const openGuide = useCallback(() => {
+    setIsGuideOpen(true)
+    setStatusMessage('เปิดคู่มือการใช้งาน')
+  }, [])
+
+  const closeGuide = useCallback(() => {
+    setIsGuideOpen(false)
+    setStatusMessage('ปิดคู่มือการใช้งาน')
+  }, [])
+
   const workerCommands = useMemo(
     () =>
       commandNames.map((name) => ({
@@ -678,6 +689,7 @@ function App() {
         onPreviousPage={() => void renderPage(Math.max(0, selectedPageIndex - 1))}
         onRunSearch={() => void runSearch()}
         onSaveCopy={() => void saveCopy()}
+        onOpenGuide={openGuide}
         onUnavailableAction={showPendingReactFeature}
         onZoomIn={() => void renderPage(selectedPageIndex, Math.min(240, zoomPercent + 10))}
         onZoomOut={() => void renderPage(selectedPageIndex, Math.max(50, zoomPercent - 10))}
@@ -743,6 +755,7 @@ function App() {
         totalPages={totalPages}
         zoom={zoomPercent}
       />
+      {isGuideOpen ? <GuideDialog onClose={closeGuide} /> : null}
     </main>
   )
 }
@@ -762,6 +775,7 @@ function Toolbar({
   onPreviousPage,
   onRunSearch,
   onSaveCopy,
+  onOpenGuide,
   onUnavailableAction,
   onZoomIn,
   onZoomOut,
@@ -780,6 +794,7 @@ function Toolbar({
   onPreviousPage: () => void
   onRunSearch: () => void
   onSaveCopy: () => void
+  onOpenGuide: () => void
   onUnavailableAction: (featureName: string) => void
   onZoomIn: () => void
   onZoomOut: () => void
@@ -827,9 +842,53 @@ function Toolbar({
       <ToolbarGroup label="ช่วยเหลือ">
         <ToolButton icon={<Search />} label="ค้นหา" disabled={isBusy || !hasDocument} onClick={onRunSearch} />
         {searchResultSummary ? <div className="search-readout">{searchResultSummary}</div> : null}
-        <ToolButton icon={<MousePointer2 />} label="คู่มือ" onClick={() => onUnavailableAction('คู่มือ')} />
+        <ToolButton icon={<MousePointer2 />} label="คู่มือ" onClick={onOpenGuide} />
       </ToolbarGroup>
     </header>
+  )
+}
+
+function GuideDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+      role="presentation"
+    >
+      <section aria-labelledby="guide-title" aria-modal="true" className="guide-dialog" role="dialog">
+        <div className="guide-heading">
+          <div>
+            <b id="guide-title">คู่มือการใช้งาน</b>
+            <span>React shell ทำงานผ่าน worker ในเครื่อง</span>
+          </div>
+          <button aria-label="ปิดคู่มือ" className="icon-action" onClick={onClose} type="button">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="guide-content">
+          <section>
+            <h2>เริ่มต้น</h2>
+            <p>กด เปิดไฟล์ เพื่อโหลด PDF จากนั้นใช้ปุ่มหน้า ซูม พอดีกว้าง และพอดีบน-ล่างเพื่อจัดมุมมอง</p>
+          </section>
+          <section>
+            <h2>จัดการหน้า</h2>
+            <p>เลือกหน้าจากรายการด้านซ้ายเพื่อย้าย ทำซ้ำ ลบ Crop หรือแยกหน้า แล้วตรวจภาพ preview ก่อนบันทึก</p>
+          </section>
+          <section>
+            <h2>วางข้อมูล</h2>
+            <p>เพิ่มข้อความ รูปภาพ ลายเซ็นภาพ กล่อง และ Highlight ได้จากแผงเครื่องมือด้านขวา</p>
+          </section>
+          <section>
+            <h2>ค้นหาและบันทึก</h2>
+            <p>ค้นหาจาก text layer ของ PDF แล้วกด บันทึก เพื่อสร้างไฟล์สำเนา ทุกงานทำในเครื่องและไม่เขียนทับต้นฉบับ</p>
+          </section>
+        </div>
+      </section>
+    </div>
   )
 }
 
