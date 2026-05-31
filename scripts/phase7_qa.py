@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from thai_pdf_editor.app.config import LOG_DIR
 from thai_pdf_editor.app.core.document_state import DocumentState
-from thai_pdf_editor.app.core.export_operations import export_pdf_as_jpg
+from thai_pdf_editor.app.core.export_operations import batch_export_pdfs_as_jpg, export_pdf_as_jpg
 from thai_pdf_editor.app.core.form_operations import editable_form_fields, update_form_fields
 from thai_pdf_editor.app.core.overlay_operations import (
     create_highlight_operation,
@@ -41,6 +41,7 @@ THAI_OVERLAY_TEXT = "ข้อความภาษาไทย QA"
 FORM_TEXT_FIELD_NAME = "customer_name"
 FORM_CHECKBOX_FIELD_NAME = "accepted"
 FORM_TEXT_VALUE = "สมชาย ทดสอบ"
+LARGE_PDF_PAGE_COUNT = 12
 
 
 def run_phase7_qa(base_dir: Path, *, include_gui: bool = False) -> dict[str, Any]:
@@ -53,9 +54,14 @@ def run_phase7_qa(base_dir: Path, *, include_gui: bool = False) -> dict[str, Any
     extract_path = qa_dir / "แยกหน้า.pdf"
     merge_path = qa_dir / "รวมไฟล์.pdf"
     jpg_dir = qa_dir / "ส่งออก_jpg"
+    batch_jpg_dir = qa_dir / "batch_jpg"
     image_path = qa_dir / "ลายเซ็น.png"
+    heavy_image_path = qa_dir / "รูปภาพสำหรับทดสอบ.png"
     form_source_path = qa_dir / "แบบฟอร์ม.pdf"
     form_output_path = qa_dir / "แบบฟอร์ม_กรอกแล้ว.pdf"
+    image_heavy_path = qa_dir / "ไฟล์รูปหนัก.pdf"
+    large_pdf_path = qa_dir / "ไฟล์หลายหน้า.pdf"
+    corrupt_path = qa_dir / "ไฟล์เสีย.pdf"
 
     font_path = first_existing_thai_font()
     if font_path is None:
@@ -63,7 +69,11 @@ def run_phase7_qa(base_dir: Path, *, include_gui: bool = False) -> dict[str, Any
 
     _create_qa_pdf(source_path, font_path)
     _create_signature_image(image_path)
+    _create_reference_image(heavy_image_path)
     _create_form_pdf(form_source_path, font_path)
+    _create_image_heavy_pdf(image_heavy_path, heavy_image_path, font_path)
+    _create_large_pdf(large_pdf_path, font_path, pages=LARGE_PDF_PAGE_COUNT)
+    _create_corrupt_pdf(corrupt_path)
     source_hash = _sha256(source_path)
     form_source_hash = _sha256(form_source_path)
 
@@ -117,6 +127,17 @@ def run_phase7_qa(base_dir: Path, *, include_gui: bool = False) -> dict[str, Any
     jpg_document.close()
     jpg_checks = _inspect_jpg_files(jpg_paths)
 
+    image_heavy_checks = _inspect_image_pdf(image_heavy_path)
+    image_heavy_render = _render_pdf_once(image_heavy_path, page_index=0, zoom=0.8)
+    large_render = _render_pdf_once(large_pdf_path, page_index=LARGE_PDF_PAGE_COUNT - 1, zoom=0.6)
+    corrupt_pdf_rejected = _corrupt_pdf_rejected(corrupt_path)
+    batch_report = batch_export_pdfs_as_jpg(
+        [source_path, image_heavy_path, large_pdf_path, corrupt_path],
+        batch_jpg_dir,
+        dpi=96,
+        quality=85,
+    )
+
     form_state = DocumentState()
     form_document = PdfDocument(form_state)
     form_document.open(form_source_path)
@@ -144,8 +165,13 @@ def run_phase7_qa(base_dir: Path, *, include_gui: bool = False) -> dict[str, Any
         "merge_path": str(merge_path),
         "jpg_dir": str(jpg_dir),
         "jpg_paths": [str(path) for path in jpg_paths],
+        "batch_jpg_dir": str(batch_jpg_dir),
+        "batch_jpg_report_path": str(batch_report.get("report_path", "")),
         "form_source_path": str(form_source_path),
         "form_output_path": str(form_output_path),
+        "image_heavy_path": str(image_heavy_path),
+        "large_pdf_path": str(large_pdf_path),
+        "corrupt_path": str(corrupt_path),
         "source_unchanged": _sha256(source_path) == source_hash,
         "form_source_unchanged": _sha256(form_source_path) == form_source_hash,
         "output_unchanged_after_jpg_export": _sha256(output_path) == output_hash_before_jpg,
@@ -156,6 +182,17 @@ def run_phase7_qa(base_dir: Path, *, include_gui: bool = False) -> dict[str, Any
         "jpg_export_count": len(jpg_paths),
         "jpg_images_valid": jpg_checks["images_valid"],
         "jpg_first_size": jpg_checks["first_size"],
+        "image_heavy_page_count": image_heavy_checks["page_count"],
+        "image_heavy_image_count": image_heavy_checks["image_count"],
+        "image_heavy_rendered": image_heavy_render["rendered"],
+        "large_pdf_page_count": large_render["page_count"],
+        "large_pdf_last_page_rendered": large_render["rendered"],
+        "corrupt_pdf_rejected": corrupt_pdf_rejected,
+        "batch_jpg_total_sources": batch_report["total_sources"],
+        "batch_jpg_succeeded": batch_report["succeeded"],
+        "batch_jpg_failed": batch_report["failed"],
+        "batch_jpg_output_count": _batch_output_count(batch_report),
+        "batch_jpg_report_exists": Path(str(batch_report["report_path"])).exists(),
         "form_dirty_after_update": form_dirty_after_update,
         "form_field_count": form_checks["field_count"],
         "form_text_value_saved": form_checks["text_value_saved"],
@@ -197,6 +234,21 @@ def _create_signature_image(path: Path) -> None:
     image.save(path)
 
 
+def _create_reference_image(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (960, 640), (244, 247, 250))
+    draw = ImageDraw.Draw(image)
+    for y in range(0, image.height, 64):
+        fill = (225 + (y // 64) % 2 * 12, 235, 242)
+        draw.rectangle((0, y, image.width, y + 63), fill=fill)
+    for index in range(9):
+        x0 = 48 + index * 96
+        color = (35 + index * 18, 80 + index * 10, 170 - index * 8)
+        draw.rounded_rectangle((x0, 100, x0 + 70, 540), radius=8, fill=color)
+    draw.text((54, 34), "Image-heavy PDF acceptance asset", fill=(20, 30, 40))
+    image.save(path)
+
+
 def _create_form_pdf(path: Path, font_path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     document = fitz.open()
@@ -232,6 +284,51 @@ def _create_form_pdf(path: Path, font_path: Path) -> None:
     document.close()
 
 
+def _create_image_heavy_pdf(path: Path, image_path: Path, font_path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = fitz.open()
+    for index in range(2):
+        page = document.new_page(width=420, height=595)
+        page.insert_text(
+            fitz.Point(42, 48),
+            f"ไฟล์รูปหนัก หน้า {index + 1}",
+            fontsize=15,
+            fontfile=str(font_path),
+            fontname="qa_image_thai_font",
+        )
+        page.insert_image(fitz.Rect(42, 82, 378, 306), filename=str(image_path))
+        page.insert_image(fitz.Rect(80, 336, 340, 510), filename=str(image_path))
+        page.draw_rect(fitz.Rect(40, 80, 380, 512), color=(0.1, 0.24, 0.5), width=1.2)
+    document.save(str(path))
+    document.close()
+
+
+def _create_large_pdf(path: Path, font_path: Path, *, pages: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = fitz.open()
+    for index in range(pages):
+        page = document.new_page(width=420, height=595)
+        page.insert_text(
+            fitz.Point(42, 58),
+            f"ไฟล์หลายหน้า {index + 1}/{pages}",
+            fontsize=15,
+            fontfile=str(font_path),
+            fontname="qa_large_thai_font",
+        )
+        page.insert_text(fitz.Point(42, 96), f"Large acceptance marker {index + 1}", fontsize=11)
+        for row in range(6):
+            y0 = 138 + row * 52
+            shade = 0.92 - row * 0.035
+            page.draw_rect(fitz.Rect(42, y0, 378, y0 + 30), color=(0.2, 0.25, 0.35), fill=(shade, shade, shade))
+    document.save(str(path))
+    document.close()
+
+
+def _create_corrupt_pdf(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"%PDF-1.7\n% intentionally truncated for acceptance\n1 0 obj\n<< /Type /Catalog >>\n")
+
+
 def _inspect_saved_pdf(path: Path) -> dict[str, Any]:
     with fitz.open(str(path)) as document:
         text = "\n".join(page.get_text() for page in document).replace("\xa0", " ")
@@ -242,6 +339,49 @@ def _inspect_saved_pdf(path: Path) -> dict[str, Any]:
             "secret_removed": SECRET_TEXT not in text,
             "image_found": images > 0,
         }
+
+
+def _inspect_image_pdf(path: Path) -> dict[str, int]:
+    with fitz.open(str(path)) as document:
+        return {
+            "page_count": document.page_count,
+            "image_count": sum(len(page.get_images()) for page in document),
+        }
+
+
+def _render_pdf_once(path: Path, *, page_index: int, zoom: float) -> dict[str, Any]:
+    state = DocumentState()
+    document = PdfDocument(state)
+    renderer = PdfRenderer()
+    try:
+        document.open(path)
+        resolved_page_index = min(page_index, document.raw.page_count - 1)
+        rendered = renderer.render_page(
+            document.raw,
+            state.working_copy_path,
+            resolved_page_index,
+            zoom,
+            state.dirty_version,
+        )
+        return {
+            "page_count": document.raw.page_count,
+            "rendered": rendered.image.width > 0 and rendered.image.height > 0,
+            "image_size": (rendered.image.width, rendered.image.height),
+        }
+    finally:
+        document.close()
+
+
+def _corrupt_pdf_rejected(path: Path) -> bool:
+    state = DocumentState()
+    document = PdfDocument(state)
+    try:
+        document.open(path)
+    except Exception:
+        return True
+    finally:
+        document.close()
+    return False
 
 
 def _form_updates_for_qa(document: fitz.Document) -> dict[int, str | bool]:
@@ -277,6 +417,10 @@ def _inspect_jpg_files(paths: list[Path]) -> dict[str, Any]:
         except Exception:
             images_valid = False
     return {"images_valid": images_valid, "first_size": first_size}
+
+
+def _batch_output_count(report: dict[str, Any]) -> int:
+    return sum(len(item.get("output_paths", [])) for item in report.get("items", []))
 
 
 def _run_gui_smoke(path: Path) -> None:
@@ -327,6 +471,17 @@ def _assert_report(report: dict[str, Any]) -> None:
         "image_found": True,
         "jpg_export_count": 3,
         "jpg_images_valid": True,
+        "image_heavy_page_count": 2,
+        "image_heavy_image_count": 4,
+        "image_heavy_rendered": True,
+        "large_pdf_page_count": LARGE_PDF_PAGE_COUNT,
+        "large_pdf_last_page_rendered": True,
+        "corrupt_pdf_rejected": True,
+        "batch_jpg_total_sources": 4,
+        "batch_jpg_succeeded": 3,
+        "batch_jpg_failed": 1,
+        "batch_jpg_output_count": 18,
+        "batch_jpg_report_exists": True,
         "form_dirty_after_update": True,
         "form_field_count": 2,
         "form_text_value_saved": True,

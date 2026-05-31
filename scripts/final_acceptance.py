@@ -22,6 +22,17 @@ from thai_pdf_editor.app.core.pdf_document import PdfDocument
 from thai_pdf_editor.app.core.pdf_renderer import PdfRenderer
 from thai_pdf_editor.app.logging_config import setup_logging
 from thai_pdf_editor.app.utils.font_utils import first_existing_thai_font
+from thai_pdf_editor.app.worker import PdfWorkerSession
+from thai_pdf_editor.app.worker_contract import (
+    COMMAND_BATCH_EXPORT_JPG,
+    COMMAND_EXPORT_JPG,
+    COMMAND_LIST_METADATA,
+    COMMAND_OPEN_PDF,
+    COMMAND_RENDER_PAGE,
+    COMMAND_REPLACE_TEXT,
+    COMMAND_SAVE_COPY,
+    COMMAND_UPDATE_METADATA,
+)
 
 QA_DIR = PROJECT_ROOT / "data" / "qa" / "final_acceptance" / "เอกสารไทย"
 LOG_DIR = PROJECT_ROOT / "data" / "logs"
@@ -53,9 +64,11 @@ def run_final_acceptance() -> dict[str, object]:
         document.close()
 
     source_hash_after = _sha256(source_path)
+    worker_report = _run_worker_acceptance(source_path)
     static_report = build_static_report(PROJECT_ROOT)
     readme_text = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8").lower()
     roadmap_text = (PROJECT_ROOT / "ROADMAP.md").read_text(encoding="utf-8").lower()
+    checklist_text = (PROJECT_ROOT / "V1_ACCEPTANCE_CHECKLIST.md").read_text(encoding="utf-8").lower()
 
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -66,10 +79,21 @@ def run_final_acceptance() -> dict[str, object]:
         "page_navigation_checked": state.current_page_index >= 0,
         "page_operations_checked": final_page_count == 2,
         "source_unchanged": source_hash_before == source_hash_after,
+        "worker_acceptance": worker_report,
         "app_log_exists": (LOG_DIR / "app.log").exists(),
         "static_clean": _static_clean(static_report),
         "readme_install_run_present": "## ติดตั้ง" in readme_text and "python run_app.py" in readme_text,
         "roadmap_41_44_present": all(f"phase {phase}" in roadmap_text for phase in (41, 42, 43, 44)),
+        "v1_checklist_present": all(
+            marker in checklist_text
+            for marker in (
+                "local-only",
+                "core function qa",
+                "real pdf acceptance",
+                "ui completion",
+                "packaging",
+            )
+        ),
         "passed": False,
     }
     report["passed"] = all(
@@ -81,12 +105,13 @@ def run_final_acceptance() -> dict[str, object]:
             "page_navigation_checked",
             "page_operations_checked",
             "source_unchanged",
+            "v1_checklist_present",
             "app_log_exists",
             "static_clean",
             "readme_install_run_present",
             "roadmap_41_44_present",
         )
-    )
+    ) and bool(worker_report["passed"])
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     if not report["passed"]:
@@ -110,6 +135,76 @@ def _create_pdf(path: Path) -> None:
         )
     document.save(str(path))
     document.close()
+
+
+def _run_worker_acceptance(source_path: Path) -> dict[str, object]:
+    preview_dir = QA_DIR / "worker_previews"
+    jpg_dir = QA_DIR / "worker_jpg"
+    batch_jpg_dir = QA_DIR / "worker_batch_jpg"
+    saved_path = QA_DIR / "worker_saved.pdf"
+    session = PdfWorkerSession(preview_dir=preview_dir)
+    try:
+        opened = session.handle({"command": COMMAND_OPEN_PDF, "payload": {"path": str(source_path)}})
+        rendered = session.handle({"command": COMMAND_RENDER_PAGE, "payload": {"page_index": 0, "zoom": 1.0}})
+        metadata_updated = session.handle(
+            {
+                "command": COMMAND_UPDATE_METADATA,
+                "payload": {"updates": {"title": "Final Worker Acceptance", "author": "Thai PDF Editor QA"}},
+            }
+        )
+        metadata_listed = session.handle({"command": COMMAND_LIST_METADATA})
+        replaced = session.handle(
+            {
+                "command": COMMAND_REPLACE_TEXT,
+                "payload": {
+                    "search_text": "Final acceptance",
+                    "replacement_text": "Worker accepted",
+                    "page_scope": "current",
+                    "font_size": 14,
+                },
+            }
+        )
+        saved = session.handle({"command": COMMAND_SAVE_COPY, "payload": {"destination_path": str(saved_path)}})
+        exported = session.handle(
+            {
+                "command": COMMAND_EXPORT_JPG,
+                "payload": {"destination_dir": str(jpg_dir), "page_scope": "current", "dpi": 72, "quality": 80},
+            }
+        )
+        batch_exported = session.handle(
+            {
+                "command": COMMAND_BATCH_EXPORT_JPG,
+                "payload": {
+                    "source_paths": [str(source_path), str(saved_path)],
+                    "destination_dir": str(batch_jpg_dir),
+                    "dpi": 72,
+                    "quality": 80,
+                },
+            }
+        )
+    finally:
+        session.close()
+
+    metadata = metadata_listed.get("payload", {}).get("metadata", {}) if metadata_listed.get("ok") else {}
+    saved_text = _pdf_text(saved_path) if saved_path.exists() else ""
+    report = {
+        "opened": opened.get("ok") is True,
+        "rendered": rendered.get("ok") is True and Path(str(rendered.get("payload", {}).get("preview_path", ""))).exists(),
+        "metadata_updated": metadata_updated.get("ok") is True and metadata.get("title") == "Final Worker Acceptance",
+        "replace_text_pending": replaced.get("ok") is True and replaced.get("payload", {}).get("operation_count") == 1,
+        "saved_copy_exists": saved.get("ok") is True and saved_path.exists(),
+        "saved_copy_contains_replacement": "Worker accepted" in saved_text,
+        "single_jpg_count": exported.get("ok") is True and exported.get("payload", {}).get("count") == 1,
+        "batch_jpg_count": batch_exported.get("ok") is True and batch_exported.get("payload", {}).get("count") == 4,
+        "batch_jpg_report_exists": Path(str(batch_exported.get("payload", {}).get("report_path", ""))).exists(),
+    }
+    report["passed"] = all(bool(value) for value in report.values())
+    return report
+
+
+def _pdf_text(path: Path) -> str:
+    with fitz.open(str(path)) as document:
+        return "\n".join(page.get_text() for page in document)
 
 
 def _sha256(path: Path) -> str:

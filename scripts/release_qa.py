@@ -36,6 +36,7 @@ REQUIRED_PATHS = [
     "README.md",
     "RELEASE_NOTES.md",
     "ROADMAP.md",
+    "V1_ACCEPTANCE_CHECKLIST.md",
     "requirements.txt",
     "thai_pdf_editor/app/main.py",
     "thai_pdf_editor/app/ui/main_window.py",

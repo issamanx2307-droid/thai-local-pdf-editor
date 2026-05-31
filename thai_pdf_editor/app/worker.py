@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +14,21 @@ from thai_pdf_editor.app.config import TEMP_DIR
 from thai_pdf_editor.app.constants import DEFAULT_ZOOM
 from thai_pdf_editor.app.core.document_state import DocumentState
 from thai_pdf_editor.app.core.errors import InvalidOperationError
+from thai_pdf_editor.app.core.export_operations import (
+    DEFAULT_JPG_DPI,
+    DEFAULT_JPG_QUALITY,
+    JPG_EXPORT_SCOPE_CURRENT,
+    batch_export_pdfs_as_jpg,
+    export_pdf_as_jpg,
+    resolve_jpg_page_indices,
+)
+from thai_pdf_editor.app.core.form_operations import editable_form_fields, update_form_fields
+from thai_pdf_editor.app.core.metadata_operations import editable_metadata, update_metadata
 from thai_pdf_editor.app.core.overlay_operations import (
     DEFAULT_HIGHLIGHT_COLOR,
     DEFAULT_SHAPE_COLOR,
     DEFAULT_TEXT_COLOR,
+    create_redact_operation,
     create_highlight_operation,
     create_image_operation,
     create_rectangle_operation,
@@ -29,22 +41,32 @@ from thai_pdf_editor.app.core.pdf_search import search_pdf_text
 from thai_pdf_editor.app.core.print_operations import get_default_printer, list_printers, print_pdf
 from thai_pdf_editor.app.core.save_manager import SaveManager
 from thai_pdf_editor.app.core.signature_operations import create_visual_signature_image
+from thai_pdf_editor.app.core.text_edit_operations import (
+    TEXT_REPLACE_SCOPE_CURRENT,
+    create_replace_text_operations,
+    resolve_text_replace_page_indices,
+)
 from thai_pdf_editor.app.core.undo_redo import redo_last_pending, undo_last_pending
 from thai_pdf_editor.app.logging_config import setup_logging
 from thai_pdf_editor.app.models.geometry import PdfPoint, PdfRect
 from thai_pdf_editor.app.worker_contract import (
     COMMAND_ADD_HIGHLIGHT_OVERLAY,
     COMMAND_ADD_IMAGE_OVERLAY,
+    COMMAND_ADD_REDACTION_OVERLAY,
     COMMAND_ADD_TEXT_OVERLAY,
     COMMAND_BATCH,
+    COMMAND_BATCH_EXPORT_JPG,
     COMMAND_CLOSE_DOCUMENT,
     COMMAND_CROP_PAGE,
     COMMAND_CREATE_VISUAL_SIGNATURE,
     COMMAND_DELETE_PAGE,
     COMMAND_DRAW_RECTANGLE_OVERLAY,
     COMMAND_DUPLICATE_PAGE,
+    COMMAND_EXPORT_JPG,
     COMMAND_EXTRACT_PAGE,
     COMMAND_GO_TO_PAGE,
+    COMMAND_LIST_FORM_FIELDS,
+    COMMAND_LIST_METADATA,
     COMMAND_LIST_PRINTERS,
     COMMAND_MERGE_PDFS,
     COMMAND_MOVE_PAGE,
@@ -52,9 +74,13 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_PRINT_PDF,
     COMMAND_RENDER_PAGE,
     COMMAND_REDO_PENDING,
+    COMMAND_REPLACE_TEXT,
+    COMMAND_ROTATE_PAGE,
     COMMAND_SAVE_COPY,
     COMMAND_SEARCH_TEXT,
     COMMAND_UNDO_PENDING,
+    COMMAND_UPDATE_FORM_FIELDS,
+    COMMAND_UPDATE_METADATA,
     error_response,
     state_payload,
     success_response,
@@ -90,12 +116,22 @@ class PdfWorkerSession:
                 return self._render_page(payload)
             if command == COMMAND_GO_TO_PAGE:
                 return self._go_to_page(payload)
+            if command == COMMAND_LIST_METADATA:
+                return self._list_metadata()
+            if command == COMMAND_UPDATE_METADATA:
+                return self._update_metadata(payload)
+            if command == COMMAND_LIST_FORM_FIELDS:
+                return self._list_form_fields()
+            if command == COMMAND_UPDATE_FORM_FIELDS:
+                return self._update_form_fields(payload)
             if command == COMMAND_LIST_PRINTERS:
                 return self._list_printers()
             if command == COMMAND_MERGE_PDFS:
                 return self._merge_pdfs(payload)
             if command == COMMAND_MOVE_PAGE:
                 return self._move_page(payload)
+            if command == COMMAND_ROTATE_PAGE:
+                return self._rotate_page(payload)
             if command == COMMAND_DUPLICATE_PAGE:
                 return self._duplicate_page(payload)
             if command == COMMAND_EXTRACT_PAGE:
@@ -104,18 +140,26 @@ class PdfWorkerSession:
                 return self._delete_page(payload)
             if command == COMMAND_SEARCH_TEXT:
                 return self._search_text(payload)
+            if command == COMMAND_REPLACE_TEXT:
+                return self._replace_text(payload)
             if command == COMMAND_ADD_TEXT_OVERLAY:
                 return self._add_text_overlay(payload)
             if command == COMMAND_DRAW_RECTANGLE_OVERLAY:
                 return self._draw_rectangle_overlay(payload)
             if command == COMMAND_ADD_HIGHLIGHT_OVERLAY:
                 return self._add_highlight_overlay(payload)
+            if command == COMMAND_ADD_REDACTION_OVERLAY:
+                return self._add_redaction_overlay(payload)
             if command == COMMAND_ADD_IMAGE_OVERLAY:
                 return self._add_image_overlay(payload)
             if command == COMMAND_CREATE_VISUAL_SIGNATURE:
                 return self._create_visual_signature(payload)
             if command == COMMAND_CROP_PAGE:
                 return self._crop_page(payload)
+            if command == COMMAND_EXPORT_JPG:
+                return self._export_jpg(payload)
+            if command == COMMAND_BATCH_EXPORT_JPG:
+                return self._batch_export_jpg(payload)
             if command == COMMAND_SAVE_COPY:
                 return self._save_copy(payload)
             if command == COMMAND_PRINT_PDF:
@@ -188,6 +232,83 @@ class PdfWorkerSession:
         page_index = _int_payload(payload, "page_index", self.state.current_page_index)
         self._set_current_page_or_raise(page_index)
         return success_response(COMMAND_GO_TO_PAGE, self.state)
+
+    def _list_metadata(self) -> dict[str, Any]:
+        self._require_document()
+        return success_response(
+            COMMAND_LIST_METADATA,
+            self.state,
+            {
+                "metadata": editable_metadata(self.document.raw),
+            },
+        )
+
+    def _update_metadata(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        raw_updates = payload.get("updates") or payload.get("metadata") or {}
+        if not isinstance(raw_updates, dict):
+            raise InvalidOperationError("ข้อมูล metadata ไม่ถูกต้อง")
+        operation = update_metadata(self.document.raw, self.state, raw_updates)
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_UPDATE_METADATA,
+            self.state,
+            {
+                "operation_id": operation.id,
+                "metadata": editable_metadata(self.document.raw),
+            },
+        )
+
+    def _list_form_fields(self) -> dict[str, Any]:
+        self._require_document()
+        fields = editable_form_fields(self.document.raw)
+        return success_response(
+            COMMAND_LIST_FORM_FIELDS,
+            self.state,
+            {
+                "fields": [
+                    {
+                        "xref": field.xref,
+                        "page_index": field.page_index,
+                        "name": field.name,
+                        "field_type": field.field_type,
+                        "field_type_label": field.field_type_label,
+                        "value": field.value,
+                        "is_checkbox": field.is_checkbox,
+                    }
+                    for field in fields
+                ],
+            },
+        )
+
+    def _update_form_fields(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        raw_updates = payload.get("updates") or {}
+        if not isinstance(raw_updates, dict):
+            raise InvalidOperationError("ข้อมูลฟอร์มไม่ถูกต้อง")
+        updates = {int(xref): value for xref, value in raw_updates.items()}
+        operation = update_form_fields(self.document.raw, self.state, updates)
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_UPDATE_FORM_FIELDS,
+            self.state,
+            {
+                "operation_id": operation.id,
+                "changed_xrefs": list(operation.payload.get("changed_xrefs", [])),
+                "fields": [
+                    {
+                        "xref": field.xref,
+                        "page_index": field.page_index,
+                        "name": field.name,
+                        "field_type": field.field_type,
+                        "field_type_label": field.field_type_label,
+                        "value": field.value,
+                        "is_checkbox": field.is_checkbox,
+                    }
+                    for field in editable_form_fields(self.document.raw)
+                ],
+            },
+        )
 
     def _list_printers(self) -> dict[str, Any]:
         printers = list_printers()
@@ -296,6 +417,30 @@ class PdfWorkerSession:
             },
         )
 
+    def _rotate_page(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+        degrees = _int_payload(payload, "degrees", 90)
+        if degrees not in (-90, 90, 180):
+            raise InvalidOperationError("คำสั่งหมุนหน้าต้องเป็น -90, 90 หรือ 180 องศา")
+        before_rotation = self.document.get_page(self.state.current_page_index).rotation
+        operation = self.page_operations.rotate_current_page(degrees)
+        after_rotation = self.document.get_page(self.state.current_page_index).rotation
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_ROTATE_PAGE,
+            self.state,
+            {
+                "page_index": self.state.current_page_index,
+                "degrees": degrees,
+                "before_rotation": before_rotation,
+                "after_rotation": after_rotation,
+                "operation_id": operation.id,
+            },
+        )
+
     def _duplicate_page(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_document()
         selected_page_index = payload.get("selected_page_index")
@@ -371,6 +516,42 @@ class PdfWorkerSession:
             },
         )
 
+    def _replace_text(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+
+        page_scope = str(payload.get("page_scope") or TEXT_REPLACE_SCOPE_CURRENT)
+        page_indices = resolve_text_replace_page_indices(
+            page_scope,
+            self.state.current_page_index,
+            self.state.total_pages,
+        )
+        font_path_text = str(payload.get("font_path") or "").strip()
+        operations = create_replace_text_operations(
+            self.document.raw,
+            page_indices=page_indices,
+            search_text=str(payload.get("search_text") or ""),
+            replacement_text=str(payload.get("replacement_text") or ""),
+            font_size=max(6, min(96, _int_payload(payload, "font_size", 16))),
+            color=_color_payload(payload.get("color"), DEFAULT_TEXT_COLOR),
+            font_path=Path(font_path_text) if font_path_text else None,
+        )
+        for operation in operations:
+            self.state.record_operation(operation, pending=True)
+        self.renderer.clear_cache()
+        return success_response(
+            COMMAND_REPLACE_TEXT,
+            self.state,
+            {
+                "operation_ids": [operation.id for operation in operations],
+                "operation_count": len(operations),
+                "page_indices": list(page_indices),
+                "pending_count": len(self.state.pending_operations),
+            },
+        )
+
     def _add_text_overlay(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_document()
         selected_page_index = payload.get("selected_page_index")
@@ -437,6 +618,21 @@ class PdfWorkerSession:
         self.state.record_operation(operation, pending=True)
         self.renderer.clear_cache()
         return self._overlay_response(COMMAND_ADD_HIGHLIGHT_OVERLAY, operation)
+
+    def _add_redaction_overlay(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+
+        operation = create_redact_operation(
+            page_index=self.state.current_page_index,
+            rect=self._overlay_rect(payload),
+        )
+        operation.validate(self.state.total_pages)
+        self.state.record_operation(operation, pending=True)
+        self.renderer.clear_cache()
+        return self._overlay_response(COMMAND_ADD_REDACTION_OVERLAY, operation)
 
     def _add_image_overlay(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_document()
@@ -508,6 +704,63 @@ class PdfWorkerSession:
                 "page_index": operation.page_index,
                 "before_cropbox": list(operation.payload.get("before_cropbox", ())),
                 "after_cropbox": list(operation.payload.get("after_cropbox", ())),
+            },
+        )
+
+    def _export_jpg(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._require_document()
+        selected_page_index = payload.get("selected_page_index")
+        if selected_page_index is not None:
+            self._set_current_page_or_raise(int(selected_page_index))
+
+        page_scope = str(payload.get("page_scope") or JPG_EXPORT_SCOPE_CURRENT)
+        page_indices = resolve_jpg_page_indices(page_scope, self.state.current_page_index, self.state.total_pages)
+        destination_text = str(payload.get("destination_dir") or "").strip()
+        destination_dir = Path(destination_text) if destination_text else self._default_jpg_export_dir()
+        output_paths = export_pdf_as_jpg(
+            self.document.raw,
+            self.state,
+            destination_dir,
+            page_indices=page_indices,
+            dpi=_int_payload(payload, "dpi", DEFAULT_JPG_DPI),
+            quality=_int_payload(payload, "quality", DEFAULT_JPG_QUALITY),
+        )
+        return success_response(
+            COMMAND_EXPORT_JPG,
+            self.state,
+            {
+                "destination_dir": str(destination_dir),
+                "output_paths": [str(path) for path in output_paths],
+                "file_names": [path.name for path in output_paths],
+                "count": len(output_paths),
+                "page_scope": page_scope,
+            },
+        )
+
+    def _batch_export_jpg(self, payload: dict[str, Any]) -> dict[str, Any]:
+        source_values = payload.get("source_paths") or []
+        if not isinstance(source_values, list):
+            raise InvalidOperationError("กรุณาเลือก PDF อย่างน้อย 1 ไฟล์")
+
+        source_paths = [Path(str(value)) for value in source_values if str(value).strip()]
+        destination_text = str(payload.get("destination_dir") or "").strip()
+        destination_dir = Path(destination_text) if destination_text else self._default_batch_jpg_export_dir()
+        report = batch_export_pdfs_as_jpg(
+            source_paths,
+            destination_dir,
+            dpi=_int_payload(payload, "dpi", DEFAULT_JPG_DPI),
+            quality=_int_payload(payload, "quality", DEFAULT_JPG_QUALITY),
+        )
+        output_paths = _flatten_report_output_paths(report)
+        return success_response(
+            COMMAND_BATCH_EXPORT_JPG,
+            self.state,
+            {
+                **report,
+                "source_count": len(source_paths),
+                "output_paths": [str(path) for path in output_paths],
+                "file_names": [path.name for path in output_paths],
+                "count": len(output_paths),
             },
         )
 
@@ -610,6 +863,24 @@ class PdfWorkerSession:
             suffix += 1
         return candidate
 
+    def _default_jpg_export_dir(self) -> Path:
+        stem = Path(str(self.state.current_file_path or "document")).stem
+        safe_stem = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in stem)[:48] or "document"
+        output_dir = TEMP_DIR / "react_bridge_jpg_exports" / safe_stem
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    def _default_batch_jpg_export_dir(self) -> Path:
+        base_dir = TEMP_DIR / "react_bridge_batch_jpg_exports"
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = base_dir / f"batch_{stamp}"
+        suffix = 1
+        while output_dir.exists():
+            output_dir = base_dir / f"batch_{stamp}_{suffix:02d}"
+            suffix += 1
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
 
 def run_request(request: dict[str, Any], *, preview_dir: Path | None = None) -> dict[str, Any]:
     """Run a request in a temporary worker session."""
@@ -665,6 +936,22 @@ def _crop_rect_from_payload(page_rect: Any, payload: dict[str, Any]) -> PdfRect:
 def _int_payload(payload: dict[str, Any], key: str, default: int) -> int:
     value = payload.get(key, default)
     return int(value)
+
+
+def _flatten_report_output_paths(report: dict[str, object]) -> list[Path]:
+    items = report.get("items")
+    if not isinstance(items, list):
+        return []
+
+    output_paths: list[Path] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        paths = item.get("output_paths")
+        if not isinstance(paths, list):
+            continue
+        output_paths.extend(Path(str(path)) for path in paths if str(path).strip())
+    return output_paths
 
 
 def _float_payload(payload: dict[str, Any], key: str, default: float) -> float:

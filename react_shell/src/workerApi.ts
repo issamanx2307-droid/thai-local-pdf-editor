@@ -3,16 +3,21 @@ const BRIDGE_BASE_URL = (import.meta.env.VITE_PDF_BRIDGE_URL || 'http://127.0.0.
 export type WorkerCommandName =
   | 'add_highlight_overlay'
   | 'add_image_overlay'
+  | 'add_redaction_overlay'
   | 'add_text_overlay'
   | 'batch'
+  | 'batch_export_jpg'
   | 'close_document'
   | 'crop_page'
   | 'create_visual_signature'
   | 'delete_page'
   | 'draw_rectangle_overlay'
   | 'duplicate_page'
+  | 'export_jpg'
   | 'extract_page'
   | 'go_to_page'
+  | 'list_form_fields'
+  | 'list_metadata'
   | 'list_printers'
   | 'merge_pdfs'
   | 'move_page'
@@ -20,15 +25,29 @@ export type WorkerCommandName =
   | 'print_pdf'
   | 'render_page'
   | 'redo_pending'
+  | 'replace_text'
+  | 'rotate_page'
   | 'save_copy'
   | 'search_text'
   | 'undo_pending'
+  | 'update_form_fields'
+  | 'update_metadata'
 
 export type WorkerSearchResult = {
   page_index: number
   match_index: number
   rect: [number, number, number, number]
   label: string
+}
+
+export type WorkerFormField = {
+  xref: number
+  page_index: number
+  name: string
+  field_type: number
+  field_type_label: string
+  value: string | boolean
+  is_checkbox: boolean
 }
 
 export type WorkerState = {

@@ -11,7 +11,10 @@ from thai_pdf_editor.app.core.errors import AppError
 from thai_pdf_editor.app.core.undo_redo import can_redo_pending, can_undo_pending
 
 COMMAND_BATCH = "batch"
+COMMAND_BATCH_EXPORT_JPG = "batch_export_jpg"
 COMMAND_ADD_TEXT_OVERLAY = "add_text_overlay"
+COMMAND_ADD_REDACTION_OVERLAY = "add_redaction_overlay"
+COMMAND_EXPORT_JPG = "export_jpg"
 COMMAND_ADD_HIGHLIGHT_OVERLAY = "add_highlight_overlay"
 COMMAND_ADD_IMAGE_OVERLAY = "add_image_overlay"
 COMMAND_CLOSE_DOCUMENT = "close_document"
@@ -22,6 +25,8 @@ COMMAND_DRAW_RECTANGLE_OVERLAY = "draw_rectangle_overlay"
 COMMAND_DUPLICATE_PAGE = "duplicate_page"
 COMMAND_EXTRACT_PAGE = "extract_page"
 COMMAND_GO_TO_PAGE = "go_to_page"
+COMMAND_LIST_FORM_FIELDS = "list_form_fields"
+COMMAND_LIST_METADATA = "list_metadata"
 COMMAND_LIST_PRINTERS = "list_printers"
 COMMAND_MERGE_PDFS = "merge_pdfs"
 COMMAND_MOVE_PAGE = "move_page"
@@ -29,9 +34,13 @@ COMMAND_OPEN_PDF = "open_pdf"
 COMMAND_PRINT_PDF = "print_pdf"
 COMMAND_RENDER_PAGE = "render_page"
 COMMAND_REDO_PENDING = "redo_pending"
+COMMAND_ROTATE_PAGE = "rotate_page"
 COMMAND_SAVE_COPY = "save_copy"
 COMMAND_SEARCH_TEXT = "search_text"
 COMMAND_UNDO_PENDING = "undo_pending"
+COMMAND_UPDATE_FORM_FIELDS = "update_form_fields"
+COMMAND_UPDATE_METADATA = "update_metadata"
+COMMAND_REPLACE_TEXT = "replace_text"
 
 
 def state_payload(state: DocumentState) -> dict[str, Any]:

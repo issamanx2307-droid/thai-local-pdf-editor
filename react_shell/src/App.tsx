@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import {
   ArrowDown,
   ArrowLeft,
@@ -14,12 +14,14 @@ import {
   Minus,
   MousePointer2,
   Printer,
+  Redo2,
   RotateCcw,
   RotateCw,
   Save,
   Search,
   Square,
   Type,
+  Undo2,
   X,
   ZoomIn,
   ZoomOut,
@@ -33,6 +35,7 @@ import {
   uploadLocalImage,
   uploadLocalPdf,
   type WorkerCommandName,
+  type WorkerFormField,
   type WorkerResponse,
   type WorkerSearchResult,
   type WorkerState,
@@ -41,24 +44,35 @@ import './App.css'
 
 const fallbackPages = Array.from({ length: 3 }, (_, index) => index + 1)
 const defaultZoomPercent = 100
+const minZoomPercent = 50
+const maxZoomPercent = 240
 
 const commandNames: WorkerCommandName[] = [
   'add_highlight_overlay',
   'add_image_overlay',
+  'add_redaction_overlay',
   'add_text_overlay',
+  'batch_export_jpg',
   'close_document',
   'crop_page',
   'draw_rectangle_overlay',
   'create_visual_signature',
+  'export_jpg',
   'open_pdf',
   'render_page',
   'go_to_page',
+  'list_metadata',
+  'update_metadata',
+  'list_form_fields',
+  'update_form_fields',
   'list_printers',
   'merge_pdfs',
   'move_page',
+  'rotate_page',
   'duplicate_page',
   'extract_page',
   'delete_page',
+  'replace_text',
   'search_text',
   'save_copy',
   'print_pdf',
@@ -67,6 +81,27 @@ const commandNames: WorkerCommandName[] = [
 ]
 const demoCommandNames = new Set<WorkerCommandName>(['open_pdf', 'render_page'])
 type BridgeStatus = 'idle' | 'connecting' | 'ready' | 'error'
+type PreviewImageSize = {
+  width: number
+  height: number
+  zoom: number
+}
+type MetadataFields = {
+  title: string
+  author: string
+  subject: string
+  keywords: string
+}
+type PageScope = 'current' | 'all'
+type ToolTab = 'search' | 'edit' | 'data' | 'export' | 'status'
+
+const emptyMetadata: MetadataFields = {
+  title: '',
+  author: '',
+  subject: '',
+  keywords: '',
+}
+const unsavedChangesMessage = 'ไฟล์มีการเปลี่ยนแปลงที่ยังไม่ได้บันทึก ต้องการทิ้งการเปลี่ยนแปลงและทำต่อหรือไม่'
 
 function searchResultsFrom(response: WorkerResponse): WorkerSearchResult[] {
   const results = response.payload.results
@@ -98,8 +133,50 @@ function responseFor(response: WorkerResponse, command: WorkerCommandName): Work
   return response.responses?.find((item) => item.command === command)
 }
 
+function metadataFromPayload(response: WorkerResponse): MetadataFields {
+  const metadata = response.payload.metadata
+  if (!metadata || typeof metadata !== 'object') {
+    return emptyMetadata
+  }
+  const raw = metadata as Partial<Record<keyof MetadataFields, unknown>>
+  return {
+    title: typeof raw.title === 'string' ? raw.title : '',
+    author: typeof raw.author === 'string' ? raw.author : '',
+    subject: typeof raw.subject === 'string' ? raw.subject : '',
+    keywords: typeof raw.keywords === 'string' ? raw.keywords : '',
+  }
+}
+
+function formFieldsFromPayload(response: WorkerResponse): WorkerFormField[] {
+  const fields = response.payload.fields
+  if (!Array.isArray(fields)) {
+    return []
+  }
+  return fields.filter(isWorkerFormField)
+}
+
+function isWorkerFormField(value: unknown): value is WorkerFormField {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const field = value as Partial<WorkerFormField>
+  return (
+    typeof field.xref === 'number' &&
+    typeof field.page_index === 'number' &&
+    typeof field.name === 'string' &&
+    typeof field.field_type === 'number' &&
+    typeof field.field_type_label === 'string' &&
+    (typeof field.value === 'string' || typeof field.value === 'boolean') &&
+    typeof field.is_checkbox === 'boolean'
+  )
+}
+
 function fileNameFromPath(path: string): string {
   return path.split(/[\\/]/).pop() || path
+}
+
+function clampZoomPercent(value: number): number {
+  return Math.max(minZoomPercent, Math.min(maxZoomPercent, Math.round(value)))
 }
 
 function App() {
@@ -125,19 +202,70 @@ function App() {
   const [imageOverlayWidth, setImageOverlayWidth] = useState('140')
   const [signatureText, setSignatureText] = useState('ลายเซ็นภาพ')
   const [cropMarginPercent, setCropMarginPercent] = useState('8')
+  const [replaceSearchText, setReplaceSearchText] = useState('')
+  const [replaceTextValue, setReplaceTextValue] = useState('')
+  const [replacePageScope, setReplacePageScope] = useState<PageScope>('current')
+  const [metadataFields, setMetadataFields] = useState<MetadataFields>(emptyMetadata)
+  const [formFields, setFormFields] = useState<WorkerFormField[]>([])
+  const [jpgPageScope, setJpgPageScope] = useState<PageScope>('current')
+  const [jpgDpi, setJpgDpi] = useState('150')
+  const [jpgQuality, setJpgQuality] = useState('95')
+  const [batchJpgFileNames, setBatchJpgFileNames] = useState<string[]>([])
+  const [activeToolTab, setActiveToolTab] = useState<ToolTab>('edit')
   const [isGuideOpen, setIsGuideOpen] = useState(false)
   const [isPrintDialogOpen, setIsPrintDialogOpen] = useState(false)
   const [printers, setPrinters] = useState<string[]>([])
   const [selectedPrinter, setSelectedPrinter] = useState('')
   const [printCopies, setPrintCopies] = useState('1')
+  const [previewImageSize, setPreviewImageSize] = useState<PreviewImageSize | null>(null)
+  const [isViewerExpanded, setIsViewerExpanded] = useState(false)
+  const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false)
+  const appShellRef = useRef<HTMLElement | null>(null)
+  const viewerStageRef = useRef<HTMLDivElement | null>(null)
+  const openPdfInputRef = useRef<HTMLInputElement | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const mergePdfInputRef = useRef<HTMLInputElement | null>(null)
+  const batchJpgInputRef = useRef<HTMLInputElement | null>(null)
+  const discardResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
 
   const totalPages = pages.length
   const selectedPageNumber = selectedPageIndex + 1
   const hasDocument = Boolean(documentPath)
   const searchResultSummary =
     searchResults.length > 0 && activeSearchIndex >= 0 ? `${activeSearchIndex + 1}/${searchResults.length}` : ''
+
+  useEffect(() => {
+    if (!dirty) {
+      return
+    }
+
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', warnBeforeUnload)
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload)
+  }, [dirty])
+
+  const confirmDiscardDirty = useCallback(() => {
+    if (!dirty) {
+      return Promise.resolve(true)
+    }
+
+    setIsDiscardDialogOpen(true)
+    setStatusMessage('มีงานที่ยังไม่ได้บันทึก กรุณายืนยันก่อนทำต่อ')
+    return new Promise<boolean>((resolve) => {
+      discardResolveRef.current = resolve
+    })
+  }, [dirty])
+
+  const answerDiscardPrompt = useCallback((confirmed: boolean) => {
+    discardResolveRef.current?.(confirmed)
+    discardResolveRef.current = null
+    setIsDiscardDialogOpen(false)
+    setStatusMessage(confirmed ? 'ยืนยันการทิ้งงานที่ยังไม่ได้บันทึก' : 'ยกเลิกเพื่อเก็บงานที่ยังไม่ได้บันทึกไว้')
+  }, [])
 
   const applyResponse = useCallback((response: WorkerResponse, renderResponse = lastRenderResponse(response)) => {
     const nextState: WorkerState = renderResponse?.state || response.state
@@ -150,6 +278,9 @@ function App() {
       setCanUndo(false)
       setCanRedo(false)
       setPreviewUrl(null)
+      setPreviewImageSize(null)
+      setMetadataFields(emptyMetadata)
+      setFormFields([])
       return
     }
 
@@ -171,9 +302,22 @@ function App() {
     if (nextPreviewUrl) {
       setPreviewUrl(`${nextPreviewUrl}?v=${Date.now()}`)
     }
+    const imageWidth = renderResponse?.payload.image_width
+    const imageHeight = renderResponse?.payload.image_height
+    if (typeof imageWidth === 'number' && typeof imageHeight === 'number' && imageWidth > 0 && imageHeight > 0) {
+      setPreviewImageSize({
+        width: imageWidth,
+        height: imageHeight,
+        zoom: nextState.zoom_level || 1,
+      })
+    }
   }, [])
 
   const loadDemo = useCallback(async () => {
+    if (!(await confirmDiscardDirty())) {
+      return
+    }
+
     setIsBusy(true)
     setLastCommand('demo')
     setBridgeStatus('connecting')
@@ -184,6 +328,8 @@ function App() {
       applyResponse(response)
       setSearchResults([])
       setActiveSearchIndex(-1)
+      setMetadataFields(emptyMetadata)
+      setFormFields([])
       setBridgeStatus('ready')
       setStatusMessage('เชื่อมต่อ Python worker แล้ว')
     } catch (error) {
@@ -193,7 +339,57 @@ function App() {
     } finally {
       setIsBusy(false)
     }
-  }, [applyResponse])
+  }, [applyResponse, confirmDiscardDirty])
+
+  const openPdfFile = useCallback(
+    async (file: File | undefined) => {
+      if (!file) {
+        return
+      }
+      if (!(await confirmDiscardDirty())) {
+        if (openPdfInputRef.current) {
+          openPdfInputRef.current.value = ''
+        }
+        return
+      }
+
+      setIsBusy(true)
+      setLastCommand('open_pdf')
+      setBridgeStatus('connecting')
+      setStatusMessage(`กำลังเปิด PDF: ${file.name}`)
+      try {
+        await getBridgeHealth()
+        const uploaded = await uploadLocalPdf(file)
+        const response = await callWorker({
+          command: 'batch',
+          commands: [
+            { command: 'open_pdf', payload: { path: uploaded.path } },
+            { command: 'render_page', payload: { page_index: 0, zoom: defaultZoomPercent / 100 } },
+          ],
+        })
+        applyResponse(response)
+        setSearchQuery('')
+        setSearchResults([])
+        setActiveSearchIndex(-1)
+        setSelectedImagePath(null)
+        setSelectedImageName('')
+        setMetadataFields(emptyMetadata)
+        setFormFields([])
+        setBridgeStatus('ready')
+        setStatusMessage(`เปิดไฟล์แล้ว: ${uploaded.file_name}`)
+      } catch (error) {
+        setBridgeStatus('error')
+        setStatusMessage(error instanceof Error ? error.message : 'เปิดไฟล์ PDF ไม่สำเร็จ')
+        setPreviewUrl(null)
+      } finally {
+        setIsBusy(false)
+        if (openPdfInputRef.current) {
+          openPdfInputRef.current.value = ''
+        }
+      }
+    },
+    [applyResponse, confirmDiscardDirty],
+  )
 
   const renderPage = useCallback(
     async (pageIndex: number, zoom = zoomPercent) => {
@@ -217,6 +413,48 @@ function App() {
     },
     [applyResponse, zoomPercent],
   )
+
+  const fitPageToViewer = useCallback(
+    async (mode: 'width' | 'height') => {
+      if (!hasDocument) {
+        setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนปรับพอดีหน้าจอ')
+        return
+      }
+      if (!previewImageSize || !viewerStageRef.current) {
+        await renderPage(selectedPageIndex, defaultZoomPercent)
+        return
+      }
+
+      const stage = viewerStageRef.current
+      const styles = window.getComputedStyle(stage)
+      const horizontalPadding = Number.parseFloat(styles.paddingLeft) + Number.parseFloat(styles.paddingRight)
+      const verticalPadding = Number.parseFloat(styles.paddingTop) + Number.parseFloat(styles.paddingBottom)
+      const availableWidth = Math.max(120, stage.clientWidth - horizontalPadding - 24)
+      const availableHeight = Math.max(120, stage.clientHeight - verticalPadding - 24)
+      const baseWidth = previewImageSize.width / previewImageSize.zoom
+      const baseHeight = previewImageSize.height / previewImageSize.zoom
+      const nextZoom =
+        mode === 'width'
+          ? clampZoomPercent((availableWidth / baseWidth) * 100)
+          : clampZoomPercent((availableHeight / baseHeight) * 100)
+      await renderPage(selectedPageIndex, nextZoom)
+      setStatusMessage(mode === 'width' ? 'ปรับพอดีกว้างตามหน้าต่างแล้ว' : 'ปรับพอดีบน-ล่างตามหน้าต่างแล้ว')
+    },
+    [hasDocument, previewImageSize, renderPage, selectedPageIndex],
+  )
+
+  const toggleViewerExpanded = useCallback(() => {
+    setIsViewerExpanded((current) => {
+      const next = !current
+      setStatusMessage(next ? 'ขยายพื้นที่ดูเอกสารแล้ว' : 'กลับสู่หน้าจอปกติแล้ว')
+      if (next) {
+        void appShellRef.current?.requestFullscreen?.().catch(() => undefined)
+      } else if (document.fullscreenElement) {
+        void document.exitFullscreen().catch(() => undefined)
+      }
+      return next
+    })
+  }, [])
 
   const moveSelectedPage = useCallback(
     async (direction: -1 | 1) => {
@@ -249,6 +487,39 @@ function App() {
       }
     },
     [applyResponse, selectedPageIndex, totalPages, zoomPercent],
+  )
+
+  const rotateSelectedPage = useCallback(
+    async (degrees: -90 | 90) => {
+      if (!hasDocument) {
+        setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนหมุนหน้า')
+        return
+      }
+
+      setIsBusy(true)
+      setLastCommand('rotate_page')
+      setStatusMessage(`กำลังหมุนหน้า${degrees > 0 ? 'ขวา' : 'ซ้าย'}ผ่าน worker...`)
+      try {
+        const response = await callWorker({
+          command: 'batch',
+          commands: [
+            { command: 'rotate_page', payload: { selected_page_index: selectedPageIndex, degrees } },
+            { command: 'render_page', payload: { page_index: selectedPageIndex, zoom: zoomPercent / 100 } },
+          ],
+        })
+        applyResponse(response)
+        setSearchResults([])
+        setActiveSearchIndex(-1)
+        setBridgeStatus('ready')
+        setStatusMessage(`หมุนหน้า${degrees > 0 ? 'ขวา' : 'ซ้าย'}แล้ว`)
+      } catch (error) {
+        setBridgeStatus('error')
+        setStatusMessage(error instanceof Error ? error.message : 'หมุนหน้าไม่สำเร็จ')
+      } finally {
+        setIsBusy(false)
+      }
+    },
+    [applyResponse, hasDocument, selectedPageIndex, zoomPercent],
   )
 
   const duplicateSelectedPage = useCallback(async () => {
@@ -417,6 +688,9 @@ function App() {
       setStatusMessage('ยังไม่ได้เปิดไฟล์ PDF')
       return
     }
+    if (!(await confirmDiscardDirty())) {
+      return
+    }
 
     setIsBusy(true)
     setLastCommand('close_document')
@@ -436,7 +710,7 @@ function App() {
     } finally {
       setIsBusy(false)
     }
-  }, [applyResponse, hasDocument])
+  }, [applyResponse, confirmDiscardDirty, hasDocument])
 
   const goToSearchResult = useCallback(
     async (resultIndex: number) => {
@@ -598,6 +872,94 @@ function App() {
     [applyResponse, hasDocument, selectedPageIndex, zoomPercent],
   )
 
+  const addRedactionOverlay = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนวาง Redaction')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('add_redaction_overlay')
+    setStatusMessage('กำลังวาง Redaction ผ่าน worker...')
+    try {
+      const response = await callWorker({
+        command: 'batch',
+        commands: [
+          { command: 'add_redaction_overlay', payload: { selected_page_index: selectedPageIndex } },
+          { command: 'render_page', payload: { page_index: selectedPageIndex, zoom: zoomPercent / 100 } },
+        ],
+      })
+      applyResponse(response)
+      setSearchResults([])
+      setActiveSearchIndex(-1)
+      setBridgeStatus('ready')
+      setStatusMessage('วาง Redaction แล้ว ตรวจพื้นที่ก่อนบันทึก')
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'วาง Redaction ไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument, selectedPageIndex, zoomPercent])
+
+  const replaceExistingText = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนแก้ข้อความเดิม')
+      return
+    }
+    const searchText = replaceSearchText.trim()
+    if (!searchText) {
+      setStatusMessage('กรุณากรอกข้อความเดิมที่ต้องการค้นหา')
+      return
+    }
+
+    const parsedFontSize = Number.parseInt(textOverlayFontSize, 10)
+    const fontSize = Number.isFinite(parsedFontSize) ? Math.max(6, Math.min(96, parsedFontSize)) : 16
+    setIsBusy(true)
+    setLastCommand('replace_text')
+    setStatusMessage('กำลังแก้ข้อความเดิมแบบ pending ผ่าน worker...')
+    try {
+      const response = await callWorker({
+        command: 'batch',
+        commands: [
+          {
+            command: 'replace_text',
+            payload: {
+              selected_page_index: selectedPageIndex,
+              search_text: searchText,
+              replacement_text: replaceTextValue,
+              page_scope: replacePageScope,
+              font_size: fontSize,
+              color: '#111111',
+            },
+          },
+          { command: 'render_page', payload: { page_index: selectedPageIndex, zoom: zoomPercent / 100 } },
+        ],
+      })
+      applyResponse(response)
+      setSearchResults([])
+      setActiveSearchIndex(-1)
+      setBridgeStatus('ready')
+      const replaced = responseFor(response, 'replace_text')
+      const count = typeof replaced?.payload.operation_count === 'number' ? replaced.payload.operation_count : 0
+      setStatusMessage(`เตรียมแก้ข้อความเดิมแล้ว ${count} รายการ`)
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'แก้ข้อความเดิมไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [
+    applyResponse,
+    hasDocument,
+    replacePageScope,
+    replaceSearchText,
+    replaceTextValue,
+    selectedPageIndex,
+    textOverlayFontSize,
+    zoomPercent,
+  ])
+
   const chooseImageFile = useCallback(async (file: File | undefined) => {
     if (!file) {
       return
@@ -632,6 +994,12 @@ function App() {
         }
         return
       }
+      if (!(await confirmDiscardDirty())) {
+        if (mergePdfInputRef.current) {
+          mergePdfInputRef.current.value = ''
+        }
+        return
+      }
 
       setIsBusy(true)
       setLastCommand('merge_pdfs')
@@ -660,7 +1028,7 @@ function App() {
         }
       }
     },
-    [applyResponse, zoomPercent],
+    [applyResponse, confirmDiscardDirty, zoomPercent],
   )
 
   const openPrintDialog = useCallback(async () => {
@@ -835,6 +1203,201 @@ function App() {
     }
   }, [applyResponse, cropMarginPercent, hasDocument, selectedPageIndex, zoomPercent])
 
+  const loadMetadata = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนดูข้อมูลเอกสาร')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('list_metadata')
+    setStatusMessage('กำลังโหลด metadata จาก worker...')
+    try {
+      const response = await callWorker({ command: 'list_metadata' })
+      setMetadataFields(metadataFromPayload(response))
+      setBridgeStatus('ready')
+      setStatusMessage('โหลดข้อมูลเอกสารแล้ว')
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'โหลดข้อมูลเอกสารไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [hasDocument])
+
+  const saveMetadata = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนบันทึกข้อมูลเอกสาร')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('update_metadata')
+    setStatusMessage('กำลังบันทึก metadata ลง working copy...')
+    try {
+      const response = await callWorker({
+        command: 'update_metadata',
+        payload: { updates: metadataFields },
+      })
+      applyResponse(response)
+      setMetadataFields(metadataFromPayload(response))
+      setBridgeStatus('ready')
+      setStatusMessage('บันทึก metadata แล้ว กดบันทึกเพื่อสร้างไฟล์สำเนา')
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'บันทึก metadata ไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument, metadataFields])
+
+  const loadFormFields = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนดูฟอร์ม')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('list_form_fields')
+    setStatusMessage('กำลังโหลดฟอร์มจาก worker...')
+    try {
+      const response = await callWorker({ command: 'list_form_fields' })
+      const fields = formFieldsFromPayload(response)
+      setFormFields(fields)
+      setBridgeStatus('ready')
+      setStatusMessage(fields.length ? `โหลดฟอร์มแล้ว ${fields.length} ช่อง` : 'ไม่พบช่องฟอร์มที่แก้ไขได้')
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'โหลดฟอร์มไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [hasDocument])
+
+  const saveFormFields = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนบันทึกฟอร์ม')
+      return
+    }
+    if (!formFields.length) {
+      setStatusMessage('ยังไม่มีช่องฟอร์มให้บันทึก')
+      return
+    }
+
+    setIsBusy(true)
+    setLastCommand('update_form_fields')
+    setStatusMessage('กำลังบันทึกฟอร์มลง working copy...')
+    try {
+      const updates = Object.fromEntries(formFields.map((field) => [String(field.xref), field.value]))
+      const response = await callWorker({
+        command: 'batch',
+        commands: [
+          { command: 'update_form_fields', payload: { updates } },
+          { command: 'render_page', payload: { page_index: selectedPageIndex, zoom: zoomPercent / 100 } },
+        ],
+      })
+      applyResponse(response)
+      const updated = responseFor(response, 'update_form_fields')
+      if (updated) {
+        setFormFields(formFieldsFromPayload(updated))
+      }
+      setBridgeStatus('ready')
+      setStatusMessage('บันทึกฟอร์มแล้ว กดบันทึกเพื่อสร้างไฟล์สำเนา')
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'บันทึกฟอร์มไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, formFields, hasDocument, selectedPageIndex, zoomPercent])
+
+  const updateFormFieldValue = useCallback((xref: number, value: string | boolean) => {
+    setFormFields((current) => current.map((field) => (field.xref === xref ? { ...field, value } : field)))
+  }, [])
+
+  const exportJpg = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนส่งออก JPG')
+      return
+    }
+
+    const dpi = Number.parseInt(jpgDpi, 10)
+    const quality = Number.parseInt(jpgQuality, 10)
+    setIsBusy(true)
+    setLastCommand('export_jpg')
+    setStatusMessage('กำลังส่งออก JPG ในเครื่อง...')
+    try {
+      const response = await callWorker({
+        command: 'export_jpg',
+        payload: {
+          selected_page_index: selectedPageIndex,
+          page_scope: jpgPageScope,
+          dpi: Number.isFinite(dpi) ? dpi : 150,
+          quality: Number.isFinite(quality) ? quality : 95,
+        },
+      })
+      applyResponse(response)
+      setBridgeStatus('ready')
+      const count = typeof response.payload.count === 'number' ? response.payload.count : 0
+      const fileNames = Array.isArray(response.payload.file_names)
+        ? response.payload.file_names.filter((name): name is string => typeof name === 'string')
+        : []
+      setStatusMessage(`ส่งออก JPG แล้ว ${count} ไฟล์${fileNames.length ? `: ${fileNames.slice(0, 2).join(', ')}` : ''}`)
+    } catch (error) {
+      setBridgeStatus('error')
+      setStatusMessage(error instanceof Error ? error.message : 'ส่งออก JPG ไม่สำเร็จ')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [applyResponse, hasDocument, jpgDpi, jpgPageScope, jpgQuality, selectedPageIndex])
+
+  const batchExportJpgFiles = useCallback(
+    async (fileList: FileList | null | undefined) => {
+      const files = Array.from(fileList || []).filter((file) => file.name.toLowerCase().endsWith('.pdf'))
+      if (!files.length) {
+        setStatusMessage('กรุณาเลือก PDF อย่างน้อย 1 ไฟล์สำหรับ Batch JPG')
+        return
+      }
+
+      const dpi = Number.parseInt(jpgDpi, 10)
+      const quality = Number.parseInt(jpgQuality, 10)
+      const fileNames = files.map((file) => file.name)
+      setBatchJpgFileNames(fileNames)
+      setActiveToolTab('export')
+      setIsBusy(true)
+      setLastCommand('batch_export_jpg')
+      setStatusMessage(`กำลัง Batch JPG ${files.length} ไฟล์ในเครื่อง...`)
+      try {
+        const uploadedPdfs = await Promise.all(files.map((file) => uploadLocalPdf(file)))
+        const response = await callWorker({
+          command: 'batch_export_jpg',
+          payload: {
+            source_paths: uploadedPdfs.map((item) => item.path),
+            dpi: Number.isFinite(dpi) ? dpi : 150,
+            quality: Number.isFinite(quality) ? quality : 95,
+          },
+        })
+        applyResponse(response)
+        setBridgeStatus('ready')
+        const succeeded = typeof response.payload.succeeded === 'number' ? response.payload.succeeded : 0
+        const failed = typeof response.payload.failed === 'number' ? response.payload.failed : 0
+        const count = typeof response.payload.count === 'number' ? response.payload.count : 0
+        const reportPath = typeof response.payload.report_path === 'string' ? response.payload.report_path : ''
+        setStatusMessage(
+          `Batch JPG เสร็จ: PDF สำเร็จ ${succeeded}/${files.length}, JPG ${count} ไฟล์${
+            failed ? `, ล้มเหลว ${failed}` : ''
+          }${reportPath ? ` | รายงาน: ${fileNameFromPath(reportPath)}` : ''}`,
+        )
+      } catch (error) {
+        setBridgeStatus('error')
+        setStatusMessage(error instanceof Error ? error.message : 'Batch JPG ไม่สำเร็จ')
+      } finally {
+        setIsBusy(false)
+      }
+    },
+    [applyResponse, jpgDpi, jpgQuality],
+  )
+
   const openGuide = useCallback(() => {
     setIsGuideOpen(true)
     setStatusMessage('เปิดคู่มือการใช้งาน')
@@ -855,21 +1418,23 @@ function App() {
   )
 
   return (
-    <main className="app-shell">
+    <main ref={appShellRef} className={`app-shell ${isViewerExpanded ? 'is-viewer-expanded' : ''}`}>
       <Toolbar
         canRedo={canRedo}
         canUndo={canUndo}
         hasDocument={hasDocument}
+        isViewerExpanded={isViewerExpanded}
         isBusy={isBusy}
         searchResultSummary={searchResultSummary}
         selectedPage={selectedPageNumber}
         totalPages={totalPages}
         zoom={zoomPercent}
-        onFitHeight={() => void renderPage(selectedPageIndex, 92)}
-        onFitWidth={() => void renderPage(selectedPageIndex, 100)}
+        onFitHeight={() => void fitPageToViewer('height')}
+        onFitWidth={() => void fitPageToViewer('width')}
         onCloseDocument={() => void closeDocument()}
         onNextPage={() => void renderPage(Math.min(totalPages - 1, selectedPageIndex + 1))}
         onOpenDemo={loadDemo}
+        onOpenPdf={() => openPdfInputRef.current?.click()}
         onPreviousPage={() => void renderPage(Math.max(0, selectedPageIndex - 1))}
         onPrint={openPrintDialog}
         onRedo={() => void runPendingHistory('redo_pending')}
@@ -877,9 +1442,10 @@ function App() {
         onSaveCopy={() => void saveCopy()}
         onMergePdfs={() => mergePdfInputRef.current?.click()}
         onOpenGuide={openGuide}
+        onToggleViewerExpanded={toggleViewerExpanded}
         onUndo={() => void runPendingHistory('undo_pending')}
-        onZoomIn={() => void renderPage(selectedPageIndex, Math.min(240, zoomPercent + 10))}
-        onZoomOut={() => void renderPage(selectedPageIndex, Math.max(50, zoomPercent - 10))}
+        onZoomIn={() => void renderPage(selectedPageIndex, Math.min(maxZoomPercent, zoomPercent + 10))}
+        onZoomOut={() => void renderPage(selectedPageIndex, Math.max(minZoomPercent, zoomPercent - 10))}
       />
       <section className="workspace">
         <PagePanel
@@ -891,27 +1457,41 @@ function App() {
           onDuplicateSelectedPage={duplicateSelectedPage}
           onExtractSelectedPage={extractSelectedPage}
           onMoveSelectedPage={moveSelectedPage}
+          onRotateSelectedPage={rotateSelectedPage}
           onSelectPage={(pageIndex) => void renderPage(pageIndex)}
         />
         <Viewer
           bridgeStatus={bridgeStatus}
           isBusy={isBusy}
           previewUrl={previewUrl}
+          stageRef={viewerStageRef}
           selectedPage={selectedPageNumber}
           statusMessage={statusMessage}
           zoom={zoomPercent}
         />
         <ToolPanel
+          activeToolTab={activeToolTab}
           activeSearchIndex={activeSearchIndex}
+          batchJpgFileNames={batchJpgFileNames}
           bridgeStatus={bridgeStatus}
           cropMarginPercent={cropMarginPercent}
+          formFields={formFields}
           hasDocument={hasDocument}
           imageInputRef={imageInputRef}
           imageOverlayWidth={imageOverlayWidth}
           isBusy={isBusy}
+          jpgDpi={jpgDpi}
+          jpgPageScope={jpgPageScope}
+          jpgQuality={jpgQuality}
+          metadataFields={metadataFields}
+          replacePageScope={replacePageScope}
+          replaceSearchText={replaceSearchText}
+          replaceTextValue={replaceTextValue}
           selectedImageName={selectedImageName}
           signatureText={signatureText}
           onAddHighlightOverlay={() => void addShapeOverlay('add_highlight_overlay')}
+          onAddRedactionOverlay={() => void addRedactionOverlay()}
+          onChooseBatchJpgFiles={() => batchJpgInputRef.current?.click()}
           onNextSearchResult={() => void goToSearchResult(activeSearchIndex + 1)}
           onPreviousSearchResult={() => void goToSearchResult(activeSearchIndex - 1)}
           onAddTextOverlay={() => void addTextOverlay()}
@@ -919,15 +1499,30 @@ function App() {
           onCreateSignatureImage={() => void createSignatureImage()}
           onCropCurrentPage={() => void cropCurrentPage()}
           onDrawRectangleOverlay={() => void addShapeOverlay('draw_rectangle_overlay')}
+          onExportJpg={() => void exportJpg()}
+          onFormFieldValueChange={updateFormFieldValue}
           onCropMarginPercentChange={setCropMarginPercent}
           onImageOverlayWidthChange={setImageOverlayWidth}
+          onJpgDpiChange={setJpgDpi}
+          onJpgPageScopeChange={setJpgPageScope}
+          onJpgQualityChange={setJpgQuality}
+          onLoadFormFields={() => void loadFormFields()}
+          onLoadMetadata={() => void loadMetadata()}
+          onMetadataChange={(field, value) => setMetadataFields((current) => ({ ...current, [field]: value }))}
           onPlaceImageOverlay={() => void addImageOverlay()}
+          onReplaceExistingText={() => void replaceExistingText()}
           onRunSearch={() => void runSearch()}
+          onSaveFormFields={() => void saveFormFields()}
+          onSaveMetadata={() => void saveMetadata()}
           onSearchQueryChange={setSearchQuery}
           onSelectSearchResult={(resultIndex) => void goToSearchResult(resultIndex)}
+          onReplacePageScopeChange={setReplacePageScope}
+          onReplaceSearchTextChange={setReplaceSearchText}
+          onReplaceTextValueChange={setReplaceTextValue}
           onSignatureTextChange={setSignatureText}
           onTextOverlayChange={setTextOverlayValue}
           onTextOverlayFontSizeChange={setTextOverlayFontSize}
+          onToolTabChange={setActiveToolTab}
           searchQuery={searchQuery}
           searchResults={searchResults}
           textOverlayFontSize={textOverlayFontSize}
@@ -944,11 +1539,29 @@ function App() {
         zoom={zoomPercent}
       />
       <input
+        ref={openPdfInputRef}
+        accept="application/pdf,.pdf"
+        className="file-input"
+        onChange={(event) => void openPdfFile(event.currentTarget.files?.[0])}
+        type="file"
+      />
+      <input
         ref={mergePdfInputRef}
         accept="application/pdf,.pdf"
         className="file-input"
         multiple
         onChange={(event) => void mergePdfFiles(event.currentTarget.files)}
+        type="file"
+      />
+      <input
+        ref={batchJpgInputRef}
+        accept="application/pdf,.pdf"
+        className="file-input"
+        multiple
+        onChange={(event) => {
+          void batchExportJpgFiles(event.currentTarget.files)
+          event.currentTarget.value = ''
+        }}
         type="file"
       />
       {isPrintDialogOpen ? (
@@ -964,6 +1577,7 @@ function App() {
         />
       ) : null}
       {isGuideOpen ? <GuideDialog onClose={closeGuide} /> : null}
+      {isDiscardDialogOpen ? <DiscardChangesDialog onCancel={() => answerDiscardPrompt(false)} onConfirm={() => answerDiscardPrompt(true)} /> : null}
     </main>
   )
 }
@@ -972,6 +1586,7 @@ function Toolbar({
   canRedo,
   canUndo,
   hasDocument,
+  isViewerExpanded,
   isBusy,
   searchResultSummary,
   selectedPage,
@@ -982,6 +1597,7 @@ function Toolbar({
   onCloseDocument,
   onNextPage,
   onOpenDemo,
+  onOpenPdf,
   onPreviousPage,
   onPrint,
   onRedo,
@@ -989,6 +1605,7 @@ function Toolbar({
   onSaveCopy,
   onMergePdfs,
   onOpenGuide,
+  onToggleViewerExpanded,
   onUndo,
   onZoomIn,
   onZoomOut,
@@ -996,6 +1613,7 @@ function Toolbar({
   canRedo: boolean
   canUndo: boolean
   hasDocument: boolean
+  isViewerExpanded: boolean
   isBusy: boolean
   searchResultSummary: string
   selectedPage: number
@@ -1006,6 +1624,7 @@ function Toolbar({
   onCloseDocument: () => void
   onNextPage: () => void
   onOpenDemo: () => void
+  onOpenPdf: () => void
   onPreviousPage: () => void
   onPrint: () => void
   onRedo: () => void
@@ -1013,6 +1632,7 @@ function Toolbar({
   onSaveCopy: () => void
   onMergePdfs: () => void
   onOpenGuide: () => void
+  onToggleViewerExpanded: () => void
   onUndo: () => void
   onZoomIn: () => void
   onZoomOut: () => void
@@ -1020,14 +1640,15 @@ function Toolbar({
   return (
     <header className="toolbar" aria-label="แถบเครื่องมือแก้ไข PDF">
       <ToolbarGroup label="ไฟล์">
-        <ToolButton icon={<FolderOpen />} label="เปิดไฟล์" active disabled={isBusy} onClick={onOpenDemo} />
+        <ToolButton icon={<FolderOpen />} label="เปิดไฟล์" active disabled={isBusy} onClick={onOpenPdf} />
+        <ToolButton icon={<FileText />} label="ตัวอย่าง" disabled={isBusy} onClick={onOpenDemo} />
         <ToolButton icon={<X />} label="ล้างจอ" disabled={isBusy || !hasDocument} onClick={onCloseDocument} />
         <ToolButton icon={<Save />} label="บันทึก" disabled={isBusy || !hasDocument} onClick={onSaveCopy} />
         <ToolButton icon={<Printer />} label="พิมพ์" disabled={isBusy || !hasDocument} onClick={onPrint} />
       </ToolbarGroup>
       <ToolbarGroup label="แก้ไข">
-        <ToolButton icon={<RotateCcw />} label="ย้อนกลับ" disabled={isBusy || !canUndo} onClick={onUndo} />
-        <ToolButton icon={<RotateCw />} label="ทำซ้ำ" disabled={isBusy || !canRedo} onClick={onRedo} />
+        <ToolButton icon={<Undo2 />} label="ย้อนกลับ" disabled={isBusy || !canUndo} onClick={onUndo} />
+        <ToolButton icon={<Redo2 />} label="ทำซ้ำ" disabled={isBusy || !canRedo} onClick={onRedo} />
         <ToolButton icon={<FileDown />} label="รวม PDF" disabled={isBusy} onClick={onMergePdfs} />
       </ToolbarGroup>
       <ToolbarGroup label="มุมมอง">
@@ -1038,6 +1659,12 @@ function Toolbar({
         <ToolButton icon={<ZoomIn />} label="ซูม+" disabled={isBusy || !hasDocument} onClick={onZoomIn} />
         <ToolButton icon={<Maximize2 />} label="พอดีกว้าง" wide disabled={isBusy || !hasDocument} onClick={onFitWidth} />
         <ToolButton icon={<Maximize2 />} label="พอดีบน-ล่าง" wide disabled={isBusy || !hasDocument} onClick={onFitHeight} />
+        <ToolButton
+          icon={<Maximize2 />}
+          label={isViewerExpanded ? 'ย่อจอ' : 'เต็มจอ'}
+          disabled={isBusy}
+          onClick={onToggleViewerExpanded}
+        />
       </ToolbarGroup>
       <ToolbarGroup label="ไปที่หน้า">
         <ToolButton
@@ -1146,6 +1773,43 @@ function PrintDialog({
   )
 }
 
+function DiscardChangesDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onCancel()
+        }
+      }}
+      role="presentation"
+    >
+      <section aria-labelledby="discard-title" aria-modal="true" className="discard-dialog" role="dialog">
+        <div className="guide-heading">
+          <div>
+            <b id="discard-title">มีงานที่ยังไม่ได้บันทึก</b>
+            <span>เลือกทิ้งงานเฉพาะเมื่อแน่ใจว่าจะเปิดเอกสารใหม่หรือล้างจอ</span>
+          </div>
+          <button aria-label="ยกเลิกการทิ้งงาน" className="icon-action" onClick={onCancel} type="button">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="print-content">
+          <p className="dialog-message">{unsavedChangesMessage}</p>
+          <div className="dialog-actions">
+            <button className="secondary-action" onClick={onCancel} type="button">
+              ยกเลิก
+            </button>
+            <button className="danger-action" onClick={onConfirm} type="button">
+              ทิ้งงาน
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function GuideDialog({ onClose }: { onClose: () => void }) {
   return (
     <div
@@ -1238,6 +1902,7 @@ function PagePanel({
   onDuplicateSelectedPage,
   onExtractSelectedPage,
   onMoveSelectedPage,
+  onRotateSelectedPage,
   onSelectPage,
 }: {
   hasDocument: boolean
@@ -1248,6 +1913,7 @@ function PagePanel({
   onDuplicateSelectedPage: () => void
   onExtractSelectedPage: () => void
   onMoveSelectedPage: (direction: -1 | 1) => void
+  onRotateSelectedPage: (degrees: -90 | 90) => void
   onSelectPage: (pageIndex: number) => void
 }) {
   return (
@@ -1291,6 +1957,16 @@ function PagePanel({
           ลง
         </button>
       </div>
+      <div className="page-actions-grid">
+        <button disabled={isBusy || !hasDocument} onClick={() => onRotateSelectedPage(-90)} type="button">
+          <RotateCcw size={16} />
+          หมุนซ้าย
+        </button>
+        <button disabled={isBusy || !hasDocument} onClick={() => onRotateSelectedPage(90)} type="button">
+          <RotateCw size={16} />
+          หมุนขวา
+        </button>
+      </div>
       <button
         className="secondary-action"
         disabled={isBusy || !hasDocument}
@@ -1323,6 +1999,7 @@ function Viewer({
   bridgeStatus,
   isBusy,
   previewUrl,
+  stageRef,
   selectedPage,
   statusMessage,
   zoom,
@@ -1330,13 +2007,80 @@ function Viewer({
   bridgeStatus: BridgeStatus
   isBusy: boolean
   previewUrl: string | null
+  stageRef: RefObject<HTMLDivElement | null>
   selectedPage: number
   statusMessage: string
   zoom: number
 }) {
+  const bottomScrollRef = useRef<HTMLDivElement | null>(null)
+  const [horizontalTrackWidth, setHorizontalTrackWidth] = useState(0)
+
+  useEffect(() => {
+    const stage = stageRef.current
+    const bottomScroll = bottomScrollRef.current
+    if (!stage || !bottomScroll) {
+      return
+    }
+
+    let isSyncing = false
+    let animationFrame = 0
+
+    const syncMetrics = () => {
+      setHorizontalTrackWidth(Math.max(stage.scrollWidth, stage.clientWidth))
+      if (bottomScroll.scrollLeft !== stage.scrollLeft) {
+        bottomScroll.scrollLeft = stage.scrollLeft
+      }
+    }
+
+    const scheduleSyncMetrics = () => {
+      window.cancelAnimationFrame(animationFrame)
+      animationFrame = window.requestAnimationFrame(syncMetrics)
+    }
+
+    const syncFromStage = () => {
+      if (isSyncing) {
+        return
+      }
+      isSyncing = true
+      bottomScroll.scrollLeft = stage.scrollLeft
+      isSyncing = false
+    }
+
+    const previewImage = stage.querySelector('.pdf-preview-image')
+    const documentPage = stage.querySelector('.document-page')
+    const resizeObserver = new ResizeObserver(scheduleSyncMetrics)
+    const metricTimers = [120, 400, 1000].map((delay) => window.setTimeout(syncMetrics, delay))
+    resizeObserver.observe(stage)
+    if (documentPage instanceof Element) {
+      resizeObserver.observe(documentPage)
+    }
+    if (previewImage instanceof HTMLImageElement) {
+      resizeObserver.observe(previewImage)
+      previewImage.addEventListener('load', scheduleSyncMetrics)
+      if (previewImage.complete) {
+        scheduleSyncMetrics()
+      }
+    }
+
+    stage.addEventListener('scroll', syncFromStage, { passive: true })
+    window.addEventListener('resize', scheduleSyncMetrics)
+    scheduleSyncMetrics()
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame)
+      metricTimers.forEach((timer) => window.clearTimeout(timer))
+      resizeObserver.disconnect()
+      if (previewImage instanceof HTMLImageElement) {
+        previewImage.removeEventListener('load', scheduleSyncMetrics)
+      }
+      stage.removeEventListener('scroll', syncFromStage)
+      window.removeEventListener('resize', scheduleSyncMetrics)
+    }
+  }, [previewUrl, stageRef, zoom])
+
   return (
     <section className="viewer" aria-label="พื้นที่แสดง PDF">
-      <div className="viewer-stage" style={{ '--viewer-zoom': `${zoom / 100}` } as CSSProperties}>
+      <div ref={stageRef} className="viewer-stage" style={{ '--viewer-zoom': `${zoom / 100}` } as CSSProperties}>
         <div className={`document-page ${previewUrl ? 'is-worker-preview' : 'is-fallback'}`}>
           {previewUrl ? (
             <img className="pdf-preview-image" src={previewUrl} alt={`ตัวอย่าง PDF หน้า ${selectedPage}`} />
@@ -1348,8 +2092,31 @@ function Viewer({
           {isBusy ? 'กำลังทำงาน...' : statusMessage}
         </div>
       </div>
-      <div className="bottom-scrollbar" aria-hidden="true">
-        <span style={{ width: `${Math.max(22, Math.min(70, zoom / 2))}%` }}></span>
+      <div
+        ref={bottomScrollRef}
+        className="bottom-scrollbar"
+        aria-label="เลื่อน PDF แนวนอน"
+        onScroll={(event) => {
+          const stage = stageRef.current
+          if (stage && Math.abs(stage.scrollLeft - event.currentTarget.scrollLeft) > 0.5) {
+            stage.scrollLeft = event.currentTarget.scrollLeft
+          }
+        }}
+        onWheel={(event) => {
+          const delta = event.deltaX || event.deltaY
+          if (delta === 0) {
+            return
+          }
+          event.preventDefault()
+          event.currentTarget.scrollLeft += delta
+          const stage = stageRef.current
+          if (stage) {
+            stage.scrollLeft = event.currentTarget.scrollLeft
+          }
+        }}
+        tabIndex={0}
+      >
+        <div className="bottom-scrollbar-track" style={{ width: `${horizontalTrackWidth}px` }}></div>
       </div>
     </section>
   )
@@ -1378,70 +2145,130 @@ function FallbackPage({ selectedPage }: { selectedPage: number }) {
 }
 
 function ToolPanel({
+  activeToolTab,
   activeSearchIndex,
+  batchJpgFileNames,
   bridgeStatus,
   cropMarginPercent,
+  formFields,
   hasDocument,
   imageInputRef,
   imageOverlayWidth,
   isBusy,
+  jpgDpi,
+  jpgPageScope,
+  jpgQuality,
+  metadataFields,
+  replacePageScope,
+  replaceSearchText,
+  replaceTextValue,
   selectedImageName,
   signatureText,
   onAddHighlightOverlay,
+  onAddRedactionOverlay,
   onAddTextOverlay,
+  onChooseBatchJpgFiles,
   onChooseImageFile,
   onCreateSignatureImage,
   onCropCurrentPage,
   onCropMarginPercentChange,
   onDrawRectangleOverlay,
+  onExportJpg,
+  onFormFieldValueChange,
   onImageOverlayWidthChange,
+  onJpgDpiChange,
+  onJpgPageScopeChange,
+  onJpgQualityChange,
+  onLoadFormFields,
+  onLoadMetadata,
+  onMetadataChange,
   onNextSearchResult,
   onPlaceImageOverlay,
   onPreviousSearchResult,
+  onReplaceExistingText,
+  onReplacePageScopeChange,
+  onReplaceSearchTextChange,
+  onReplaceTextValueChange,
   onRunSearch,
+  onSaveFormFields,
+  onSaveMetadata,
   onSearchQueryChange,
   onSelectSearchResult,
   onSignatureTextChange,
   onTextOverlayChange,
   onTextOverlayFontSizeChange,
+  onToolTabChange,
   searchQuery,
   searchResults,
   textOverlayFontSize,
   textOverlayValue,
   workerCommands,
 }: {
+  activeToolTab: ToolTab
   activeSearchIndex: number
+  batchJpgFileNames: string[]
   bridgeStatus: BridgeStatus
   cropMarginPercent: string
+  formFields: WorkerFormField[]
   hasDocument: boolean
   imageInputRef: RefObject<HTMLInputElement | null>
   imageOverlayWidth: string
   isBusy: boolean
+  jpgDpi: string
+  jpgPageScope: PageScope
+  jpgQuality: string
+  metadataFields: MetadataFields
+  replacePageScope: PageScope
+  replaceSearchText: string
+  replaceTextValue: string
   selectedImageName: string
   signatureText: string
   onAddHighlightOverlay: () => void
+  onAddRedactionOverlay: () => void
   onAddTextOverlay: () => void
+  onChooseBatchJpgFiles: () => void
   onChooseImageFile: (file: File | undefined) => Promise<void>
   onCreateSignatureImage: () => void
   onCropCurrentPage: () => void
   onCropMarginPercentChange: (value: string) => void
   onDrawRectangleOverlay: () => void
+  onExportJpg: () => void
+  onFormFieldValueChange: (xref: number, value: string | boolean) => void
   onImageOverlayWidthChange: (value: string) => void
+  onJpgDpiChange: (value: string) => void
+  onJpgPageScopeChange: (value: PageScope) => void
+  onJpgQualityChange: (value: string) => void
+  onLoadFormFields: () => void
+  onLoadMetadata: () => void
+  onMetadataChange: (field: keyof MetadataFields, value: string) => void
   onNextSearchResult: () => void
   onPlaceImageOverlay: () => void
   onPreviousSearchResult: () => void
+  onReplaceExistingText: () => void
+  onReplacePageScopeChange: (value: PageScope) => void
+  onReplaceSearchTextChange: (value: string) => void
+  onReplaceTextValueChange: (value: string) => void
   onRunSearch: () => void
+  onSaveFormFields: () => void
+  onSaveMetadata: () => void
   onSearchQueryChange: (value: string) => void
   onSelectSearchResult: (resultIndex: number) => void
   onSignatureTextChange: (value: string) => void
   onTextOverlayChange: (value: string) => void
   onTextOverlayFontSizeChange: (value: string) => void
+  onToolTabChange: (value: ToolTab) => void
   searchQuery: string
   searchResults: WorkerSearchResult[]
   textOverlayFontSize: string
   textOverlayValue: string
   workerCommands: Array<{ name: WorkerCommandName; state: string }>
 }) {
+  const batchJpgLabel = batchJpgFileNames.length
+    ? `Batch: ${batchJpgFileNames.length} ไฟล์ (${batchJpgFileNames.slice(0, 2).join(', ')}${
+        batchJpgFileNames.length > 2 ? ', ...' : ''
+      })`
+    : 'Batch: ยังไม่ได้เลือกไฟล์'
+
   return (
     <aside className="tool-panel" aria-label="เครื่องมือ">
       <div className="panel-heading">
@@ -1451,6 +2278,49 @@ function ToolPanel({
         </div>
         <FileText size={18} />
       </div>
+      <div className="tool-tabs" role="tablist" aria-label="หมวดเครื่องมือ">
+        <button
+          className={activeToolTab === 'search' ? 'is-selected' : ''}
+          onClick={() => onToolTabChange('search')}
+          role="tab"
+          type="button"
+        >
+          ค้นหา
+        </button>
+        <button
+          className={activeToolTab === 'edit' ? 'is-selected' : ''}
+          onClick={() => onToolTabChange('edit')}
+          role="tab"
+          type="button"
+        >
+          แก้ไข
+        </button>
+        <button
+          className={activeToolTab === 'data' ? 'is-selected' : ''}
+          onClick={() => onToolTabChange('data')}
+          role="tab"
+          type="button"
+        >
+          ข้อมูล
+        </button>
+        <button
+          className={activeToolTab === 'export' ? 'is-selected' : ''}
+          onClick={() => onToolTabChange('export')}
+          role="tab"
+          type="button"
+        >
+          ส่งออก
+        </button>
+        <button
+          className={activeToolTab === 'status' ? 'is-selected' : ''}
+          onClick={() => onToolTabChange('status')}
+          role="tab"
+          type="button"
+        >
+          สถานะ
+        </button>
+      </div>
+      {activeToolTab === 'search' ? (
       <section className="tool-section search-section">
         <h2>
           <Search size={16} />
@@ -1503,6 +2373,9 @@ function ToolPanel({
           </div>
         ) : null}
       </section>
+      ) : null}
+      {activeToolTab === 'edit' ? (
+      <>
       <section className="tool-section">
         <h2>
           <Type size={16} />
@@ -1533,6 +2406,35 @@ function ToolPanel({
         </div>
         <button className="primary-action" disabled={isBusy || !hasDocument} onClick={onAddTextOverlay} type="button">
           วางข้อความ
+        </button>
+      </section>
+      <section className="tool-section">
+        <h2>
+          <Type size={16} />
+          แก้ข้อความเดิม
+        </h2>
+        <input
+          disabled={isBusy || !hasDocument}
+          onChange={(event) => onReplaceSearchTextChange(event.target.value)}
+          placeholder="ข้อความเดิม"
+          value={replaceSearchText}
+        />
+        <input
+          disabled={isBusy || !hasDocument}
+          onChange={(event) => onReplaceTextValueChange(event.target.value)}
+          placeholder="ข้อความใหม่"
+          value={replaceTextValue}
+        />
+        <select
+          disabled={isBusy || !hasDocument}
+          onChange={(event) => onReplacePageScopeChange(event.currentTarget.value as PageScope)}
+          value={replacePageScope}
+        >
+          <option value="current">หน้านี้</option>
+          <option value="all">ทุกหน้าในไฟล์นี้</option>
+        </select>
+        <button className="secondary-action" disabled={isBusy || !hasDocument} onClick={onReplaceExistingText} type="button">
+          แก้ข้อความเดิม
         </button>
       </section>
       <section className="tool-section">
@@ -1601,6 +2503,9 @@ function ToolPanel({
         <button className="highlight-action" disabled={isBusy || !hasDocument} onClick={onAddHighlightOverlay} type="button">
           Highlight
         </button>
+        <button className="danger-action" disabled={isBusy || !hasDocument} onClick={onAddRedactionOverlay} type="button">
+          Redaction
+        </button>
         <div className="inline-fields crop-fields">
           <input
             aria-label="ระยะขอบ Crop หน้า"
@@ -1622,6 +2527,133 @@ function ToolPanel({
           </button>
         </div>
       </section>
+      </>
+      ) : null}
+      {activeToolTab === 'data' ? (
+      <>
+      <section className="tool-section">
+        <h2>
+          <FileText size={16} />
+          ข้อมูลเอกสาร
+        </h2>
+        <div className="metadata-grid">
+          {(['title', 'author', 'subject', 'keywords'] as Array<keyof MetadataFields>).map((field) => (
+            <input
+              key={field}
+              disabled={isBusy || !hasDocument}
+              onChange={(event) => onMetadataChange(field, event.currentTarget.value)}
+              placeholder={field}
+              value={metadataFields[field]}
+            />
+          ))}
+        </div>
+        <div className="inline-fields two-actions">
+          <button className="secondary-action compact-place-action" disabled={isBusy || !hasDocument} onClick={onLoadMetadata} type="button">
+            โหลดข้อมูล
+          </button>
+          <button className="primary-action compact-place-action" disabled={isBusy || !hasDocument} onClick={onSaveMetadata} type="button">
+            บันทึกข้อมูล
+          </button>
+        </div>
+      </section>
+      <section className="tool-section">
+        <h2>
+          <FileText size={16} />
+          ฟอร์ม PDF
+        </h2>
+        <div className="inline-fields two-actions">
+          <button className="secondary-action compact-place-action" disabled={isBusy || !hasDocument} onClick={onLoadFormFields} type="button">
+            โหลดฟอร์ม
+          </button>
+          <button
+            className="primary-action compact-place-action"
+            disabled={isBusy || !hasDocument || formFields.length === 0}
+            onClick={onSaveFormFields}
+            type="button"
+          >
+            บันทึกฟอร์ม
+          </button>
+        </div>
+        <div className="form-field-list">
+          {formFields.length ? (
+            formFields.slice(0, 6).map((field) => (
+              <label key={field.xref} className="form-field-row">
+                <span>{field.name}</span>
+                {field.is_checkbox ? (
+                  <input
+                    checked={Boolean(field.value)}
+                    disabled={isBusy || !hasDocument}
+                    onChange={(event) => onFormFieldValueChange(field.xref, event.currentTarget.checked)}
+                    type="checkbox"
+                  />
+                ) : (
+                  <input
+                    disabled={isBusy || !hasDocument}
+                    onChange={(event) => onFormFieldValueChange(field.xref, event.currentTarget.value)}
+                    value={String(field.value)}
+                  />
+                )}
+              </label>
+            ))
+          ) : (
+            <p className="empty-tool-note">ยังไม่ได้โหลดฟอร์ม</p>
+          )}
+        </div>
+      </section>
+      </>
+      ) : null}
+      {activeToolTab === 'export' ? (
+      <>
+        <section className="tool-section">
+          <h2>
+            <FileDown size={16} />
+            ส่งออก JPG
+          </h2>
+          <select
+            disabled={isBusy || !hasDocument}
+            onChange={(event) => onJpgPageScopeChange(event.currentTarget.value as PageScope)}
+            value={jpgPageScope}
+          >
+            <option value="current">หน้านี้</option>
+            <option value="all">ทุกหน้าในไฟล์นี้</option>
+          </select>
+          <div className="inline-fields two-actions">
+            <input
+              aria-label="DPI สำหรับ JPG"
+              disabled={isBusy || !hasDocument}
+              max="600"
+              min="72"
+              onChange={(event) => onJpgDpiChange(event.currentTarget.value)}
+              type="number"
+              value={jpgDpi}
+            />
+            <input
+              aria-label="คุณภาพ JPG"
+              disabled={isBusy || !hasDocument}
+              max="100"
+              min="1"
+              onChange={(event) => onJpgQualityChange(event.currentTarget.value)}
+              type="number"
+              value={jpgQuality}
+            />
+          </div>
+          <button className="primary-action" disabled={isBusy || !hasDocument} onClick={onExportJpg} type="button">
+            ส่งออก JPG
+          </button>
+        </section>
+        <section className="tool-section">
+          <h2>
+            <Layers size={16} />
+            Batch JPG
+          </h2>
+          <p className="image-selection">{batchJpgLabel}</p>
+          <button className="secondary-action" disabled={isBusy} onClick={onChooseBatchJpgFiles} type="button">
+            เลือก PDF หลายไฟล์
+          </button>
+        </section>
+      </>
+      ) : null}
+      {activeToolTab === 'status' ? (
       <section className="worker-card">
         <h2>Worker Commands</h2>
         {workerCommands.map((command) => (
@@ -1631,6 +2663,7 @@ function ToolPanel({
           </div>
         ))}
       </section>
+      ) : null}
     </aside>
   )
 }

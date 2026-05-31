@@ -17,6 +17,7 @@ from PIL import Image
 from react_shell.local_bridge import create_bridge_server
 from thai_pdf_editor.app.worker_contract import (
     COMMAND_BATCH,
+    COMMAND_BATCH_EXPORT_JPG,
     COMMAND_MERGE_PDFS,
     COMMAND_OPEN_PDF,
     COMMAND_RENDER_PAGE,
@@ -118,6 +119,52 @@ def test_react_bridge_upload_image_saves_valid_local_file(tmp_path) -> None:
         server.server_close()
 
 
+def test_react_bridge_upload_pdf_opens_and_renders_single_document(tmp_path) -> None:
+    """Bridge should support the React open-file flow for one selected local PDF."""
+    source_path = create_sample_pdf(tmp_path / "single-open.pdf", pages=4)
+    server = create_bridge_server(port=0, preview_dir=tmp_path / "previews")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        port = int(server.server_address[1])
+        upload_response = _json_request(
+            port,
+            "POST",
+            "/api/upload-pdf",
+            {
+                "file_name": source_path.name,
+                "data_url": f"data:application/pdf;base64,{base64.b64encode(source_path.read_bytes()).decode('ascii')}",
+            },
+        )
+        assert upload_response["status"] == 200
+        assert upload_response["body"]["ok"] is True
+        uploaded_path = upload_response["body"]["path"]
+
+        open_response = _json_request(
+            port,
+            "POST",
+            "/api/worker",
+            {
+                "command": COMMAND_BATCH,
+                "commands": [
+                    {"command": COMMAND_OPEN_PDF, "payload": {"path": uploaded_path}},
+                    {"command": COMMAND_RENDER_PAGE, "payload": {"page_index": 0, "zoom": 1.0}},
+                ],
+            },
+        )
+
+        assert open_response["status"] == 200
+        body = open_response["body"]
+        assert body["ok"] is True
+        assert body["state"]["total_pages"] == 4
+        assert body["responses"][1]["payload"]["preview_url"].startswith("/api/previews/")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_react_bridge_upload_pdf_and_merge_through_worker(tmp_path) -> None:
     """Bridge should accept local PDF uploads and merge them through the worker session."""
     first = create_sample_pdf(tmp_path / "first.pdf", pages=2)
@@ -164,6 +211,61 @@ def test_react_bridge_upload_pdf_and_merge_through_worker(tmp_path) -> None:
         assert body["responses"][0]["payload"]["source_count"] == 2
         assert Path(body["responses"][0]["payload"]["destination_path"]).exists()
         assert body["responses"][1]["payload"]["preview_url"].startswith("/api/previews/")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_react_bridge_uploads_multiple_pdfs_and_batch_exports_jpg(tmp_path) -> None:
+    """Bridge should support the React-approved multi-file Batch JPG flow."""
+    first = create_sample_pdf(tmp_path / "batch-one.pdf", pages=2)
+    second = create_sample_pdf(tmp_path / "batch-two.pdf", pages=1)
+    server = create_bridge_server(port=0, preview_dir=tmp_path / "previews")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        port = int(server.server_address[1])
+        uploaded_paths = []
+        for source_path in (first, second):
+            upload_response = _json_request(
+                port,
+                "POST",
+                "/api/upload-pdf",
+                {
+                    "file_name": source_path.name,
+                    "data_url": f"data:application/pdf;base64,{base64.b64encode(source_path.read_bytes()).decode('ascii')}",
+                },
+            )
+            assert upload_response["status"] == 200
+            assert upload_response["body"]["ok"] is True
+            uploaded_paths.append(upload_response["body"]["path"])
+
+        batch_response = _json_request(
+            port,
+            "POST",
+            "/api/worker",
+            {
+                "command": COMMAND_BATCH_EXPORT_JPG,
+                "payload": {
+                    "source_paths": uploaded_paths,
+                    "destination_dir": str(tmp_path / "bridge-batch-jpg"),
+                    "dpi": 72,
+                    "quality": 80,
+                },
+            },
+        )
+
+        assert batch_response["status"] == 200
+        body = batch_response["body"]
+        assert body["ok"] is True
+        assert body["payload"]["source_count"] == 2
+        assert body["payload"]["succeeded"] == 2
+        assert body["payload"]["failed"] == 0
+        assert body["payload"]["count"] == 3
+        assert Path(body["payload"]["report_path"]).exists()
+        assert all(Path(path).exists() for path in body["payload"]["output_paths"])
     finally:
         server.shutdown()
         thread.join(timeout=5)

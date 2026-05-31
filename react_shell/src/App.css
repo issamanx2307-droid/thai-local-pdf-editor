@@ -163,6 +163,24 @@
   overflow: hidden;
 }
 
+.app-shell.is-viewer-expanded .workspace {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 6px;
+}
+
+.app-shell.is-viewer-expanded .page-panel,
+.app-shell.is-viewer-expanded .tool-panel {
+  display: none;
+}
+
+.app-shell.is-viewer-expanded .viewer {
+  border-radius: 6px;
+}
+
+.app-shell.is-viewer-expanded .viewer-stage {
+  padding: 12px;
+}
+
 .page-panel,
 .tool-panel {
   min-height: 0;
@@ -443,32 +461,73 @@
 }
 
 .bottom-scrollbar {
-  display: grid;
-  align-items: center;
-  padding: 0 16px;
+  height: 34px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: #f7faff;
   border-top: 1px solid #dbe5f3;
+  scrollbar-color: #2563d8 #e5ebf5;
+  scrollbar-width: thin;
 }
 
-.bottom-scrollbar::before {
-  content: "";
+.bottom-scrollbar:focus-visible {
+  outline: 2px solid #2c73e7;
+  outline-offset: -3px;
+}
+
+.bottom-scrollbar::-webkit-scrollbar {
   height: 16px;
-  grid-area: 1 / 1;
+}
+
+.bottom-scrollbar::-webkit-scrollbar-track {
+  border: 1px solid #d4dfef;
   border-radius: 999px;
   background: #e5ebf5;
-  border: 1px solid #d4dfef;
 }
 
-.bottom-scrollbar span {
-  width: 52%;
-  height: 16px;
-  grid-area: 1 / 1;
+.bottom-scrollbar::-webkit-scrollbar-thumb {
+  border: 3px solid #e5ebf5;
   border-radius: 999px;
   background: #2563d8;
 }
 
+.bottom-scrollbar-track {
+  height: 1px;
+  min-width: 100%;
+}
+
 .tool-panel {
   overflow: auto;
+}
+
+.tool-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #dbe5f2;
+  background: #f8fbff;
+}
+
+.tool-tabs button {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid #b7c9e3;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #164ea9;
+  font: 800 12px/1 Tahoma, "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.tool-tabs button.is-selected {
+  border-color: #1f5fcf;
+  background: #2563d8;
+  color: #ffffff;
 }
 
 .tool-section,
@@ -487,7 +546,8 @@
   font: 800 15px/1.2 Tahoma, "Segoe UI", sans-serif;
 }
 
-.tool-section input {
+.tool-section input,
+.tool-section select {
   width: 100%;
   height: 38px;
   box-sizing: border-box;
@@ -579,6 +639,10 @@
   margin-top: 8px;
 }
 
+.two-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .image-place-fields {
   grid-template-columns: minmax(0, 1fr) 116px;
 }
@@ -591,6 +655,33 @@
   border: 1px solid #111827;
   border-radius: 6px;
   background: #111111;
+}
+
+.metadata-grid,
+.form-field-list {
+  display: grid;
+  gap: 8px;
+}
+
+.form-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 8px;
+  align-items: center;
+  color: #465a78;
+  font: 700 12px/1.3 Tahoma, "Segoe UI", sans-serif;
+}
+
+.form-field-row input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  justify-self: start;
+}
+
+.empty-tool-note {
+  margin: 0;
+  color: #60718b;
+  font: 700 12px/1.4 Tahoma, "Segoe UI", sans-serif;
 }
 
 .command-row {
@@ -641,7 +732,8 @@
   box-shadow: 0 24px 70px rgba(15, 35, 70, 0.24);
 }
 
-.print-dialog {
+.print-dialog,
+.discard-dialog {
   width: min(480px, 100%);
   max-height: min(520px, calc(100vh - 48px));
   display: grid;
@@ -651,6 +743,10 @@
   border-radius: 8px;
   background: #fbfdff;
   box-shadow: 0 24px 70px rgba(15, 35, 70, 0.24);
+}
+
+.discard-dialog {
+  width: min(520px, 100%);
 }
 
 .guide-heading {
@@ -728,6 +824,12 @@
   color: #172033;
   font: 700 13px/1 Tahoma, "Segoe UI", sans-serif;
   padding: 0 10px;
+}
+
+.dialog-message {
+  margin: 0;
+  color: #344862;
+  font: 700 14px/1.55 Tahoma, "Segoe UI", sans-serif;
 }
 
 .dialog-actions {

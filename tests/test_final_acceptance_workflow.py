@@ -11,3 +11,6 @@ def test_final_acceptance_report_passes() -> None:
     assert report["passed"] is True
     assert report["preview_rendered"] is True
     assert report["source_unchanged"] is True
+    assert report["v1_checklist_present"] is True
+    assert report["worker_acceptance"]["passed"] is True
+    assert report["worker_acceptance"]["batch_jpg_count"] is True
