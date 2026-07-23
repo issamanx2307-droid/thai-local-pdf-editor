@@ -32,6 +32,7 @@ from thai_pdf_editor.app.ui.print_dialog import ask_print_options
 from thai_pdf_editor.app.ui.qa_checklist_dialog import checklist_items_for_document, show_qa_checklist_dialog
 from thai_pdf_editor.app.ui.save_preflight_dialog import ask_save_preflight_confirmation
 from thai_pdf_editor.app.utils.path_utils import default_edited_path
+from thai_pdf_editor.app.constants import APP_TITLE, APP_VERSION
 
 import customtkinter as ctk
 from thai_pdf_editor.app.ui.theme import COLORS
@@ -47,7 +48,10 @@ class SaveExportActionsMixin:
             self.status_bar.set_status("ยังไม่ได้เปิดไฟล์ PDF")
             return
         default_path = default_edited_path(self.doc_state.current_file_path)
-        path_text = ask_save_pdf_path(default_path)
+        self.lift()
+        self.focus_force()
+        self.update()
+        path_text = ask_save_pdf_path(default_path, parent=self)
         if not path_text:
             return
         destination = Path(path_text)
@@ -66,6 +70,7 @@ class SaveExportActionsMixin:
             previous_page_index = self.doc_state.current_page_index
             saved_path = self.save_manager.save_as(self.document.raw, self.doc_state, destination)
             self.document.open(saved_path)
+            self.title(f"{saved_path.name} - {APP_TITLE} {APP_VERSION}")
             add_recent_file(saved_path)
             self.search_results.clear()
             self.search_current_index = -1
@@ -90,7 +95,10 @@ class SaveExportActionsMixin:
         if options is None:
             return
         default_dir = self.doc_state.current_file_path.with_name(f"{self.doc_state.current_file_path.stem}_jpg")
-        directory_text = ask_export_jpg_directory(default_dir)
+        self.lift()
+        self.focus_force()
+        self.update()
+        directory_text = ask_export_jpg_directory(default_dir, parent=self)
         if not directory_text:
             return
         destination_dir = Path(directory_text)
@@ -120,7 +128,10 @@ class SaveExportActionsMixin:
 
     def batch_export_jpg_files(self) -> None:
         """Export selected PDFs to JPG files with a live progress window."""
-        path_texts = ask_batch_jpg_pdf_paths()
+        self.lift()
+        self.focus_force()
+        self.update()
+        path_texts = ask_batch_jpg_pdf_paths(parent=self)
         if not path_texts:
             return
         options = ask_batch_jpg_export_options(self)
@@ -128,7 +139,7 @@ class SaveExportActionsMixin:
             return
         source_paths = [Path(pt) for pt in path_texts]
         default_dir = source_paths[0].parent / "batch_jpg"
-        directory_text = ask_export_jpg_directory(default_dir)
+        directory_text = ask_export_jpg_directory(default_dir, parent=self)
         if not directory_text:
             return
         destination_dir = Path(directory_text)
@@ -221,12 +232,15 @@ class SaveExportActionsMixin:
 
     def merge_pdf_files(self) -> None:
         """Merge selected PDF files into a new PDF."""
-        path_texts = ask_merge_pdf_paths()
+        self.lift()
+        self.focus_force()
+        self.update()
+        path_texts = ask_merge_pdf_paths(parent=self)
         if not path_texts:
             return
         source_paths = [Path(path_text) for path_text in path_texts]
         default_path = source_paths[0].with_name(f"{source_paths[0].stem}_merged.pdf")
-        destination_text = ask_save_pdf_path(default_path)
+        destination_text = ask_save_pdf_path(default_path, parent=self)
         if not destination_text:
             return
 
@@ -247,15 +261,21 @@ class SaveExportActionsMixin:
         if not self.doc_state.has_document or self.doc_state.current_file_path is None:
             self.status_bar.set_status("ยังไม่ได้เปิดไฟล์ PDF")
             return
-        options = ask_print_options(self, total_pages=self.doc_state.total_pages)
+        options = ask_print_options(
+            self,
+            total_pages=self.doc_state.total_pages,
+            current_page=self.doc_state.display_page_number,
+        )
         if options is None:
             return
         printer = str(options["printer"])
         copies = int(options["copies"])  # type: ignore[arg-type]
+        pages = options.get("pages")  # type: ignore[assignment]
+        pages_text = str(pages) if pages else None
 
         def action() -> None:
             self.status_bar.set_status(f"กำลังส่งพิมพ์ → {printer} …")
-            print_pdf(self.doc_state.current_file_path, printer, copies=copies)
+            print_pdf(self.doc_state.current_file_path, printer, copies=copies, pages=pages_text)
             self.status_bar.set_status(f"ส่งคำสั่งพิมพ์แล้ว → {printer}")
 
         self._run_user_action(action)

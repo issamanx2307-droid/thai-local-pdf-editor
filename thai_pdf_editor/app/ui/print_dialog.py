@@ -19,17 +19,28 @@ _NO_PRINTER_LABEL = "(ไม่พบเครื่องปริ้นท์)
 _LOADING_LABEL = "กำลังโหลดเครื่องปริ้นท์ ..."
 
 
+_SCOPE_ALL = "all"
+_SCOPE_CURRENT = "current"
+_SCOPE_CUSTOM = "custom"
+
+
 def ask_print_options(
     master: ctk.CTkBaseClass,
     *,
     total_pages: int,
+    current_page: int | None = None,
 ) -> dict[str, object] | None:
     """Show a modal print dialog.
 
     The dialog opens immediately. Printer discovery runs in a background
     thread; the dropdown updates automatically when results are ready.
 
-    Returns ``{"printer": str, "copies": int}`` on confirm, or ``None`` on cancel.
+    *current_page*, if given, is the 1-based number of the page currently
+    shown on screen — it enables the "current page" scope option.
+
+    Returns ``{"printer": str, "copies": int, "pages": str | None}`` on
+    confirm (``pages`` is ``None`` for "print every page"), or ``None`` on
+    cancel.
     """
     result: dict[str, object] | None = None
 
@@ -95,34 +106,84 @@ def ask_print_options(
         border_color=COLORS["border"],
     ).grid(row=2, column=1, sticky="w", padx=(0, 16), pady=6)
 
-    # ── page count info ──────────────────────────────────────────────────────
+    # ── page range ───────────────────────────────────────────────────────────
     ctk.CTkLabel(
-        card, text="จำนวนหน้า :", font=LABEL_FONT, text_color=COLORS["text"],
-    ).grid(row=3, column=0, sticky="w", padx=(16, 8), pady=6)
-    ctk.CTkLabel(
-        card, text=f"{total_pages} หน้า", font=LABEL_FONT, text_color=COLORS["muted"],
-    ).grid(row=3, column=1, sticky="w", padx=(0, 16), pady=6)
+        card, text="หน้าที่จะพิมพ์ :", font=LABEL_FONT, text_color=COLORS["text"],
+    ).grid(row=3, column=0, sticky="nw", padx=(16, 8), pady=6)
+
+    scope_var = ctk.StringVar(value=_SCOPE_ALL)
+    scope_frame = ctk.CTkFrame(card, fg_color="transparent")
+    scope_frame.grid(row=3, column=1, sticky="w", padx=(0, 16), pady=6)
+
+    range_entry_var = ctk.StringVar(value="")
+    range_entry = ctk.CTkEntry(
+        card,
+        textvariable=range_entry_var,
+        width=180,
+        font=ENTRY_FONT,
+        placeholder_text="เช่น 1-3,5,8",
+        border_color=COLORS["border"],
+        state="disabled",
+    )
+
+    def _on_scope_changed() -> None:
+        range_entry.configure(state="normal" if scope_var.get() == _SCOPE_CUSTOM else "disabled")
+
+    ctk.CTkRadioButton(
+        scope_frame, text=f"ทั้งหมด ({total_pages} หน้า)", variable=scope_var,
+        value=_SCOPE_ALL, font=ENTRY_FONT, text_color=COLORS["text"],
+        command=_on_scope_changed,
+    ).pack(anchor="w", pady=(0, 4))
+
+    if current_page is not None:
+        ctk.CTkRadioButton(
+            scope_frame, text=f"หน้าปัจจุบัน ({current_page})", variable=scope_var,
+            value=_SCOPE_CURRENT, font=ENTRY_FONT, text_color=COLORS["text"],
+            command=_on_scope_changed,
+        ).pack(anchor="w", pady=(0, 4))
+
+    ctk.CTkRadioButton(
+        scope_frame, text="กำหนดเอง :", variable=scope_var,
+        value=_SCOPE_CUSTOM, font=ENTRY_FONT, text_color=COLORS["text"],
+        command=_on_scope_changed,
+    ).pack(anchor="w")
+
+    # ── custom range entry ──────────────────────────────────────────────────
+    range_entry.grid(row=4, column=1, sticky="w", padx=(0, 16), pady=(0, 6))
 
     # ── divider ──────────────────────────────────────────────────────────────
     ctk.CTkFrame(card, height=1, fg_color=COLORS["border"]).grid(
-        row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(10, 0),
+        row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(10, 0),
     )
 
     # ── action buttons ───────────────────────────────────────────────────────
     btn_row = ctk.CTkFrame(card, fg_color="transparent")
-    btn_row.grid(row=5, column=0, columnspan=2, sticky="e", padx=16, pady=14)
+    btn_row.grid(row=6, column=0, columnspan=2, sticky="e", padx=16, pady=14)
 
     def on_cancel() -> None:
         dialog.destroy()
+
+    def _resolve_pages() -> str | None:
+        """Return the pages spec to send, or a sentinel meaning 'invalid'."""
+        scope = scope_var.get()
+        if scope == _SCOPE_ALL:
+            return None
+        if scope == _SCOPE_CURRENT:
+            return str(current_page) if current_page is not None else None
+        custom_text = range_entry_var.get().strip()
+        return custom_text or ""
 
     def on_print() -> None:
         nonlocal result
         chosen = printer_var.get()
         if chosen in (_NO_PRINTER_LABEL, _LOADING_LABEL):
             return
+        if scope_var.get() == _SCOPE_CUSTOM and not range_entry_var.get().strip():
+            range_entry.configure(border_color=COLORS.get("error", "#d64545"))
+            return
         raw = copies_var.get().strip()
         copies = int(raw) if raw.isdigit() and int(raw) >= 1 else 1
-        result = {"printer": chosen, "copies": copies}
+        result = {"printer": chosen, "copies": copies, "pages": _resolve_pages()}
         dialog.destroy()
 
     cancel_button = ctk.CTkButton(

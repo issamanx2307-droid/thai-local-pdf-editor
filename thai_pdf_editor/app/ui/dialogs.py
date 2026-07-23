@@ -21,24 +21,25 @@ from thai_pdf_editor.app.core.export_operations import (
 from thai_pdf_editor.app.core.form_operations import FormField
 from thai_pdf_editor.app.core.text_edit_operations import TEXT_REPLACE_SCOPE_ALL, TEXT_REPLACE_SCOPE_CURRENT
 from thai_pdf_editor.app.ui.fonts import BUTTON_FONT, BUTTON_HEIGHT, ENTRY_FONT, ENTRY_HEIGHT, LABEL_FONT, TITLE_FONT
+from thai_pdf_editor.app.ui.theme import COLORS
 
 
-def ask_open_pdf_path() -> str:
+def ask_open_pdf_path(parent: object = None) -> str:
     """Ask the user to select a PDF path."""
-    return filedialog.askopenfilename(title="เปิดไฟล์ PDF", filetypes=PDF_FILE_TYPES)
+    return filedialog.askopenfilename(title="เปิดไฟล์ PDF", filetypes=PDF_FILE_TYPES, parent=parent)
 
 
-def ask_merge_pdf_paths() -> tuple[str, ...]:
+def ask_merge_pdf_paths(parent: object = None) -> tuple[str, ...]:
     """Ask the user to select multiple PDFs for merging."""
-    return filedialog.askopenfilenames(title="เลือก PDF สำหรับรวม", filetypes=PDF_FILE_TYPES)
+    return filedialog.askopenfilenames(title="เลือก PDF สำหรับรวม", filetypes=PDF_FILE_TYPES, parent=parent)
 
 
-def ask_batch_jpg_pdf_paths() -> tuple[str, ...]:
+def ask_batch_jpg_pdf_paths(parent: object = None) -> tuple[str, ...]:
     """Ask the user to select PDFs for batch JPG export."""
-    return filedialog.askopenfilenames(title="เลือก PDF สำหรับ Batch JPG", filetypes=PDF_FILE_TYPES)
+    return filedialog.askopenfilenames(title="เลือก PDF สำหรับ Batch JPG", filetypes=PDF_FILE_TYPES, parent=parent)
 
 
-def ask_save_pdf_path(default_path: Path) -> str:
+def ask_save_pdf_path(default_path: Path, parent: object = None) -> str:
     """Ask the user to choose a Save As PDF path."""
     return filedialog.asksaveasfilename(
         title="บันทึกเป็น",
@@ -46,15 +47,17 @@ def ask_save_pdf_path(default_path: Path) -> str:
         filetypes=PDF_FILE_TYPES,
         initialdir=str(default_path.parent),
         initialfile=default_path.name,
+        parent=parent,
     )
 
 
-def ask_export_jpg_directory(default_dir: Path) -> str:
+def ask_export_jpg_directory(default_dir: Path, parent: object = None) -> str:
     """Ask the user to choose a destination folder for JPG export."""
     return filedialog.askdirectory(
         title="เลือกโฟลเดอร์สำหรับบันทึก JPG",
         initialdir=str(default_dir.parent),
         mustexist=False,
+        parent=parent,
     )
 
 
@@ -582,3 +585,83 @@ def show_info(message: str) -> None:
 def confirm(message: str) -> bool:
     """Ask for confirmation."""
     return messagebox.askyesno("ยืนยัน", message)
+
+
+def confirm_save_before_close(master: ctk.CTkBaseClass | None = None) -> str:
+    """Ask whether to save unsaved changes before closing the app.
+
+    Returns "save", "discard", or "cancel".
+    """
+    result = "cancel"
+    dialog = ctk.CTkToplevel(master)
+    dialog.title("ปิดโปรแกรม")
+    dialog.geometry("420x190")
+    dialog.resizable(False, False)
+    if master is not None:
+        dialog.transient(master)
+    dialog.grab_set()
+    dialog.grid_columnconfigure((0, 1, 2), weight=1)
+
+    title = ctk.CTkLabel(
+        dialog,
+        text="บันทึกการเปลี่ยนแปลง หรือไม่?",
+        anchor="center",
+        font=TITLE_FONT,
+        wraplength=380,
+        justify="center",
+    )
+    title.grid(row=0, column=0, columnspan=3, sticky="ew", padx=16, pady=(24, 6))
+
+    subtitle = ctk.CTkLabel(
+        dialog,
+        text="ไฟล์นี้มีการเปลี่ยนแปลงที่ยังไม่ได้บันทึก หากไม่บันทึก การเปลี่ยนแปลงจะหายไป",
+        anchor="center",
+        font=LABEL_FONT,
+        text_color=COLORS["muted"],
+        wraplength=380,
+        justify="center",
+    )
+    subtitle.grid(row=1, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 18))
+
+    def choose(value: str) -> None:
+        nonlocal result
+        result = value
+        dialog.destroy()
+
+    save_button = ctk.CTkButton(
+        dialog,
+        text="บันทึก",
+        command=lambda: choose("save"),
+        height=BUTTON_HEIGHT,
+        font=BUTTON_FONT,
+        fg_color=COLORS["primary"],
+        hover_color=COLORS["primary_hover"],
+    )
+    save_button.grid(row=2, column=0, sticky="ew", padx=(16, 6), pady=(0, 18))
+
+    discard_button = ctk.CTkButton(
+        dialog,
+        text="ไม่บันทึก",
+        command=lambda: choose("discard"),
+        height=BUTTON_HEIGHT,
+        font=BUTTON_FONT,
+        fg_color=COLORS["danger"],
+        hover_color=COLORS["danger_hover"],
+    )
+    discard_button.grid(row=2, column=1, sticky="ew", padx=6, pady=(0, 18))
+
+    cancel_button = ctk.CTkButton(
+        dialog,
+        text="ยกเลิก",
+        command=lambda: choose("cancel"),
+        height=BUTTON_HEIGHT,
+        font=BUTTON_FONT,
+        fg_color=COLORS["surface_muted"],
+        hover_color=COLORS["border"],
+        text_color=COLORS["text"],
+    )
+    cancel_button.grid(row=2, column=2, sticky="ew", padx=(6, 16), pady=(0, 18))
+
+    dialog.protocol("WM_DELETE_WINDOW", lambda: choose("cancel"))
+    dialog.wait_window()
+    return result

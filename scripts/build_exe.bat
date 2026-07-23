@@ -26,6 +26,7 @@ python -m PyInstaller ^
   --exclude-module cryptography ^
   --exclude-module OpenSSL ^
   --exclude-module twisted ^
+  --icon "%CD%\assets\icons\pdf_editor.ico" ^
   --add-data "%CD%\assets;assets" ^
   --distpath "dist" ^
   --workpath "build" ^

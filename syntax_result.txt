@@ -1,0 +1,5 @@
+COLORS defined: ['app_bg', 'border', 'border_strong', 'button_lift', 'button_shadow', 'canvas', 'canvas_soft', 'danger', 'danger_hover', 'danger_pressed', 'muted', 'primary', 'primary_hover', 'primary_light', 'primary_pressed', 'secondary', 'secondary_hover', 'secondary_pressed', 'success', 'success_hover', 'surface', 'surface_muted', 'surface_soft', 'text', 'warning', 'warning_hover', 'warning_pressed']
+ICON defined:   ['check', 'copy', 'crop', 'delete', 'down', 'extract', 'fit_height', 'fit_width', 'font', 'form', 'help', 'highlight', 'image', 'info', 'merge', 'next', 'open', 'prev', 'print', 'recent', 'redact', 'redo', 'reset', 'rotate_left', 'rotate_right', 'save', 'search', 'shape', 'signature', 'split', 'text', 'undo', 'up', 'zoom_in', 'zoom_out']
+
+All COLORS references OK
+All ICON references OK

@@ -85,6 +85,91 @@ def get_default_printer() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Page range parsing
+# ---------------------------------------------------------------------------
+
+def parse_page_range(spec: str, total_pages: int) -> list[int]:
+    """Parse a 1-based page-range spec such as ``"1-3,5,8-9"`` into 0-based indices.
+
+    Returns a sorted list of unique 0-based page indices. Raises
+    :class:`PdfPrintError` for blank input, bad syntax, or pages outside
+    ``1..total_pages``.
+    """
+    if total_pages <= 0:
+        raise PdfPrintError("ไฟล์ PDF ไม่มีหน้าให้พิมพ์")
+
+    indices: set[int] = set()
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            bounds = chunk.split("-")
+            if len(bounds) != 2 or not all(b.strip().isdigit() for b in bounds):
+                raise PdfPrintError(f"รูปแบบช่วงหน้าไม่ถูกต้อง: '{chunk}'")
+            start, end = int(bounds[0]), int(bounds[1])
+            if start < 1 or end < start:
+                raise PdfPrintError(f"ช่วงหน้าไม่ถูกต้อง: '{chunk}'")
+            if end > total_pages:
+                raise PdfPrintError(f"หน้า {end} เกินจำนวนหน้าทั้งหมด ({total_pages} หน้า)")
+            indices.update(range(start - 1, end))
+        else:
+            if not chunk.isdigit():
+                raise PdfPrintError(f"รูปแบบเลขหน้าไม่ถูกต้อง: '{chunk}'")
+            page = int(chunk)
+            if page < 1 or page > total_pages:
+                raise PdfPrintError(f"หน้า {page} เกินจำนวนหน้าทั้งหมด ({total_pages} หน้า)")
+            indices.add(page - 1)
+
+    if not indices:
+        raise PdfPrintError("กรุณาระบุหน้าที่ต้องการพิมพ์")
+
+    return sorted(indices)
+
+
+def _format_page_ranges(indices: list[int]) -> str:
+    """Collapse sorted 0-based indices into a compact 1-based range string."""
+    if not indices:
+        return ""
+    ordered = sorted(set(indices))
+    parts: list[str] = []
+    start = prev = ordered[0]
+    for idx in ordered[1:]:
+        if idx == prev + 1:
+            prev = idx
+            continue
+        parts.append(str(start + 1) if start == prev else f"{start + 1}-{prev + 1}")
+        start = prev = idx
+    parts.append(str(start + 1) if start == prev else f"{start + 1}-{prev + 1}")
+    return ",".join(parts)
+
+
+def _get_page_count(pdf_path: Path) -> int:
+    """Open *pdf_path* just long enough to read its page count."""
+    try:
+        import fitz
+    except Exception as exc:  # noqa: BLE001
+        raise PdfPrintError("ไม่สามารถเตรียมระบบพิมพ์ PDF ได้", detail=str(exc)) from exc
+    try:
+        with fitz.open(pdf_path) as document:
+            return document.page_count
+    except Exception as exc:  # noqa: BLE001
+        raise PdfPrintError("ไม่สามารถอ่านไฟล์ PDF เพื่อตรวจสอบจำนวนหน้าได้", detail=str(exc)) from exc
+
+
+def _normalize_page_spec(pdf_path: Path, pages: str | None) -> str | None:
+    """Validate *pages* against the document and return a normalized spec.
+
+    Returns ``None`` when *pages* is blank, meaning "print every page".
+    """
+    if pages is None or not pages.strip():
+        return None
+    total_pages = _get_page_count(pdf_path)
+    indices = parse_page_range(pages, total_pages)
+    return _format_page_ranges(indices)
+
+
+# ---------------------------------------------------------------------------
 # Print execution
 # ---------------------------------------------------------------------------
 
@@ -97,8 +182,11 @@ def _find_sumatra() -> Path | None:
     return None
 
 
-def print_pdf(pdf_path: Path, printer_name: str, *, copies: int = 1) -> None:
+def print_pdf(pdf_path: Path, printer_name: str, *, copies: int = 1, pages: str | None = None) -> None:
     """Send *pdf_path* to *printer_name*.
+
+    *pages*, if given, is a 1-based page-range spec such as ``"1-3,5,8-9"``.
+    Leave it blank (or ``None``) to print every page.
 
     Tries SumatraPDF first (supports printer selection + copy count);
     falls back to the Windows shell 'print' verb which opens the system
@@ -106,16 +194,20 @@ def print_pdf(pdf_path: Path, printer_name: str, *, copies: int = 1) -> None:
     """
     pdf_path = Path(pdf_path)
     _validate_print_request(pdf_path, printer_name, copies)
+    page_spec = _normalize_page_spec(pdf_path, pages)
 
     sumatra = _find_sumatra()
     if sumatra:
-        _log.info("Printing via SumatraPDF: %s -> %s (x%d)", pdf_path.name, printer_name, copies)
-        _print_via_sumatra(sumatra, pdf_path, printer_name, copies=copies)
+        _log.info(
+            "Printing via SumatraPDF: %s -> %s (x%d) pages=%s",
+            pdf_path.name, printer_name, copies, page_spec or "all",
+        )
+        _print_via_sumatra(sumatra, pdf_path, printer_name, copies=copies, page_spec=page_spec)
         return
 
     if _is_windows():
         try:
-            _spawn_gdi_print_worker(pdf_path, printer_name, copies=copies)
+            _spawn_gdi_print_worker(pdf_path, printer_name, copies=copies, page_spec=page_spec)
             return
         except Exception as exc:  # noqa: BLE001
             _log.warning("internal GDI print worker could not be started: %s", exc)
@@ -133,8 +225,11 @@ def _print_via_sumatra(
     printer_name: str,
     *,
     copies: int,
+    page_spec: str | None = None,
 ) -> None:
-    settings = f"ncopies={copies}"
+    settings_parts = [page_spec] if page_spec else []
+    settings_parts.append(f"ncopies={copies}")
+    settings = ",".join(settings_parts)
     subprocess.Popen(
         [str(sumatra), "-print-to", printer_name, "-print-settings", settings, str(pdf_path)],
         creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
@@ -150,7 +245,13 @@ def _validate_print_request(pdf_path: Path, printer_name: str, copies: int) -> N
         raise PdfPrintError("จำนวนชุดพิมพ์ต้องมากกว่า 0", detail=f"invalid copies: {copies}")
 
 
-def _spawn_gdi_print_worker(pdf_path: Path, printer_name: str, *, copies: int) -> None:
+def _spawn_gdi_print_worker(
+    pdf_path: Path,
+    printer_name: str,
+    *,
+    copies: int,
+    page_spec: str | None = None,
+) -> None:
     command = _print_worker_command()
     if command is None:
         raise PdfPrintError("ไม่สามารถเริ่มตัวช่วยพิมพ์ PDF ได้")
@@ -163,12 +264,17 @@ def _spawn_gdi_print_worker(pdf_path: Path, printer_name: str, *, copies: int) -
         "--copies",
         str(copies),
     ]
+    if page_spec:
+        args += ["--pages", page_spec]
     process = subprocess.Popen(
         args,
         creationflags=_creationflags_no_window(),
         close_fds=True,
     )
-    _log.info("Started internal PDF print worker pid=%s printer=%s copies=%d", process.pid, printer_name, copies)
+    _log.info(
+        "Started internal PDF print worker pid=%s printer=%s copies=%d pages=%s",
+        process.pid, printer_name, copies, page_spec or "all",
+    )
 
 
 def _print_worker_command() -> list[str] | None:
@@ -196,19 +302,22 @@ def _print_via_shell(pdf_path: Path) -> None:
     os.startfile(str(pdf_path), "print")
 
 
-def run_print_worker(pdf_path: str, printer_name: str, *, copies: int = 1) -> int:
+def run_print_worker(pdf_path: str, printer_name: str, *, copies: int = 1, pages: str | None = None) -> int:
     """Run the hidden Windows GDI print worker process."""
     timer = threading.Timer(_PRINT_WORKER_TIMEOUT_SECONDS, _abort_timed_out_worker)
     timer.daemon = True
     timer.start()
     try:
-        _print_via_windows_gdi(Path(pdf_path), printer_name, copies=copies)
+        _print_via_windows_gdi(Path(pdf_path), printer_name, copies=copies, page_spec=pages)
     except Exception as exc:  # noqa: BLE001
         _log.exception("internal PDF print worker failed: %s", exc)
         return 1
     finally:
         timer.cancel()
-    _log.info("internal PDF print worker finished: %s -> %s (x%d)", Path(pdf_path).name, printer_name, copies)
+    _log.info(
+        "internal PDF print worker finished: %s -> %s (x%d) pages=%s",
+        Path(pdf_path).name, printer_name, copies, pages or "all",
+    )
     return 0
 
 
@@ -222,6 +331,7 @@ def _print_via_windows_gdi(
     printer_name: str,
     *,
     copies: int,
+    page_spec: str | None = None,
     render_dpi: int = _GDI_RENDER_DPI,
 ) -> None:
     _validate_print_request(pdf_path, printer_name, copies)
@@ -261,8 +371,14 @@ def _print_via_windows_gdi(
         printable_height = max(gdi32.GetDeviceCaps(hdc, _VERTRES), 1)
 
         with fitz.open(pdf_path) as document:
+            page_indices = (
+                parse_page_range(page_spec, document.page_count)
+                if page_spec
+                else list(range(document.page_count))
+            )
             for _copy_index in range(copies):
-                for page in document:
+                for page_index in page_indices:
+                    page = document.load_page(page_index)
                     _print_gdi_page(
                         gdi32,
                         hdc,

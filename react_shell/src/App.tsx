@@ -281,6 +281,7 @@ function App() {
       setPreviewImageSize(null)
       setMetadataFields(emptyMetadata)
       setFormFields([])
+      document.title = 'โปรแกรมแก้ไข PDF ภาษาไทย'
       return
     }
 
@@ -297,6 +298,13 @@ function App() {
     setDirty(nextState.dirty)
     setCanUndo(Boolean(nextState.can_undo))
     setCanRedo(Boolean(nextState.can_redo))
+
+    if (nextState.current_file_path) {
+      const fileName = nextState.current_file_path.split(/[\\/]/).pop() || nextState.current_file_path
+      document.title = `${fileName} - โปรแกรมแก้ไข PDF ภาษาไทย`
+    } else {
+      document.title = 'โปรแกรมแก้ไข PDF ภาษาไทย'
+    }
 
     const nextPreviewUrl = previewUrlFrom(renderResponse)
     if (nextPreviewUrl) {

@@ -347,17 +347,19 @@ class PdfWorkerSession:
         self._require_document()
         printer_name = str(payload.get("printer_name") or "").strip()
         copies = max(1, min(99, _int_payload(payload, "copies", 1)))
+        pages_text = str(payload.get("pages") or "").strip() or None
         source_path = self.state.working_copy_path or self.state.current_file_path
         if source_path is None:
             raise InvalidOperationError("ยังไม่ได้เปิดไฟล์ PDF")
 
-        print_pdf(source_path, printer_name, copies=copies)
+        print_pdf(source_path, printer_name, copies=copies, pages=pages_text)
         return success_response(
             COMMAND_PRINT_PDF,
             self.state,
             {
                 "printer_name": printer_name,
                 "copies": copies,
+                "pages": pages_text,
                 "source_path": str(source_path),
             },
         )

@@ -11,6 +11,7 @@ def main() -> None:
     parser.add_argument("--print-worker", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--printer", default="", help=argparse.SUPPRESS)
     parser.add_argument("--copies", type=int, default=1, help=argparse.SUPPRESS)
+    parser.add_argument("--pages", default=None, help=argparse.SUPPRESS)
     parser.add_argument("file", nargs="?", default=None, help="PDF file path to open on startup")
     args = parser.parse_args()
 
@@ -21,7 +22,7 @@ def main() -> None:
 
         ensure_app_dirs()
         setup_logging()
-        raise SystemExit(run_print_worker(args.print_worker, args.printer, copies=args.copies))
+        raise SystemExit(run_print_worker(args.print_worker, args.printer, copies=args.copies, pages=args.pages))
 
     from thai_pdf_editor.app.main import run
 

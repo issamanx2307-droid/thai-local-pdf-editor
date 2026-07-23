@@ -644,11 +644,13 @@ def test_worker_print_pdf_dispatches_working_copy(
 ) -> None:
     """Worker print should require an open document and dispatch the local working copy."""
     source_path = create_sample_pdf(tmp_path / "print-source.pdf", pages=1)
-    calls: list[tuple[Path, str, int]] = []
+    calls: list[tuple[Path, str, int, str | None]] = []
     monkeypatch.setattr(
         worker_module,
         "print_pdf",
-        lambda pdf_path, printer_name, *, copies: calls.append((Path(pdf_path), printer_name, copies)),
+        lambda pdf_path, printer_name, *, copies, pages=None: calls.append(
+            (Path(pdf_path), printer_name, copies, pages)
+        ),
     )
     session = PdfWorkerSession(preview_dir=tmp_path / "previews")
 
@@ -665,7 +667,7 @@ def test_worker_print_pdf_dispatches_working_copy(
         assert printed["ok"] is True
         assert printed["payload"]["printer_name"] == "Printer A"
         assert printed["payload"]["copies"] == 2
-        assert calls == [(working_copy, "Printer A", 2)]
+        assert calls == [(working_copy, "Printer A", 2, None)]
     finally:
         session.close()
 

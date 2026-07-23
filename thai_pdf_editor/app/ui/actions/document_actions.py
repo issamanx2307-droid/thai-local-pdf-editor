@@ -8,12 +8,18 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from thai_pdf_editor.app.constants import DEFAULT_STATUS, MAX_ZOOM, MIN_ZOOM, ZOOM_STEP
+from thai_pdf_editor.app.constants import APP_TITLE, APP_VERSION, DEFAULT_STATUS, MAX_ZOOM, MIN_ZOOM, ZOOM_STEP
 from thai_pdf_editor.app.core.errors import AppError
 from thai_pdf_editor.app.core.recent_files import add_recent_file, clear_recent_files, load_recent_files, remove_recent_file
 from thai_pdf_editor.app.core.undo_redo import can_redo_pending, can_undo_pending
-from thai_pdf_editor.app.ui.dialogs import ask_open_pdf_path, confirm, show_error, show_usage_guide_dialog
-from thai_pdf_editor.app.ui.dirty_guard import can_discard_unsaved_changes
+from thai_pdf_editor.app.ui.dialogs import (
+    ask_open_pdf_path,
+    confirm,
+    confirm_save_before_close,
+    show_error,
+    show_usage_guide_dialog,
+)
+from thai_pdf_editor.app.ui.dirty_guard import can_discard_unsaved_changes, resolve_close_action
 from thai_pdf_editor.app.ui.drag_drop import first_pdf_path
 from thai_pdf_editor.app.ui.keyboard_shortcuts import NAVIGATION_SHORTCUTS, is_text_input_event
 from thai_pdf_editor.app.ui.recent_files_dialog import show_recent_files_dialog
@@ -25,9 +31,18 @@ class DocumentActionsMixin:
     """Actions for opening documents, navigation, rendering, and shared error handling."""
 
     def request_close(self) -> None:
-        """Close the window after confirming unsaved changes."""
-        if self._confirm_discard_unsaved_changes():
+        """Close the window, offering to save unsaved changes first."""
+        action = resolve_close_action(self.doc_state.dirty, lambda: confirm_save_before_close(self))
+        if action == "close":
             self.destroy()
+        elif action == "save_then_close":
+            # Run the normal Save As flow, then only close if it actually
+            # completed (the user may still cancel the file picker or the
+            # save may fail, in which case the window must stay open).
+            self.save_as()
+            if not self.doc_state.dirty:
+                self.destroy()
+        # action == "stay": leave the window open.
 
     def destroy(self) -> None:
         """Close the current PDF before destroying the window."""
@@ -38,7 +53,10 @@ class DocumentActionsMixin:
         """Open a PDF through a file dialog."""
         if not self._confirm_discard_unsaved_changes():
             return
-        path_text = ask_open_pdf_path()
+        self.lift()
+        self.focus_force()
+        self.update()
+        path_text = ask_open_pdf_path(parent=self)
         if not path_text:
             return
         self._run_user_action(lambda: self._open_pdf_path(Path(path_text)))
@@ -99,6 +117,7 @@ class DocumentActionsMixin:
         self.renderer.clear_cache()
         self.render_current_page()
         self.status_bar.set_status(f"เปิดไฟล์แล้ว: {path.name}")
+        self.title(f"{path.name} - {APP_TITLE} {APP_VERSION}")
 
     def render_current_page(self) -> None:
         """Render and show the current PDF page."""
@@ -126,6 +145,7 @@ class DocumentActionsMixin:
         """Start background threads to pre-render the pages before and after the current one."""
         if not self.doc_state.has_document or self.doc_state.working_copy_path is None:
             return
+        document = self.document.raw
         path = self.doc_state.working_copy_path
         zoom = self.doc_state.zoom_level
         dirty_version = self.doc_state.dirty_version
@@ -140,7 +160,7 @@ class DocumentActionsMixin:
         for idx in candidates:
             threading.Thread(
                 target=self.renderer.prefetch_page,
-                args=(path, idx, zoom, dirty_version, pending),
+                args=(document, path, idx, zoom, dirty_version, pending),
                 daemon=True,
             ).start()
 
@@ -155,6 +175,15 @@ class DocumentActionsMixin:
         )
         self.page_panel.refresh(self.doc_state.total_pages, self.doc_state.current_page_index)
         self.tool_panel.set_document_loaded(self.doc_state.has_document)
+        tool_labels = {
+            "text": "เพิ่มข้อความ",
+            "image": "เพิ่มรูป/ลายเซ็นภาพ",
+            "rectangle": "วาดกล่อง",
+            "highlight": "Highlight",
+            "crop": "Crop หน้า",
+            "redact": "ลบ/ปิดทับข้อมูลถาวร",
+        }
+        self.tool_panel.set_active_tool(tool_labels.get(self.doc_state.selected_tool) if self.doc_state.selected_tool else None)
         self.status_bar.set_document_state(
             self.doc_state.display_page_number,
             self.doc_state.total_pages,
@@ -270,3 +299,4 @@ class DocumentActionsMixin:
         finally:
             if not self.doc_state.has_document:
                 self.status_bar.set_status(DEFAULT_STATUS)
+                self.title(f"{APP_TITLE} {APP_VERSION}")

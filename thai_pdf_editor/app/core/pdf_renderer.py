@@ -31,6 +31,11 @@ class PdfRenderer:
         self.cache_size = cache_size
         self._cache: OrderedDict[tuple[str, int, float, int], RenderedPage] = OrderedDict()
         self._cache_lock = threading.Lock()
+        # PyMuPDF (MuPDF) is not safe for concurrent calls on the same
+        # fitz.Document from multiple threads. Foreground renders happen on
+        # the Tk main thread while prefetch runs on background threads —
+        # this lock serializes all actual page-load/pixmap calls between them.
+        self._fitz_lock = threading.Lock()
 
     def clear_cache(self) -> None:
         """Clear all cached preview images."""
@@ -55,17 +60,20 @@ class PdfRenderer:
                 return self._cache[cache_key]
 
         try:
-            page = document.load_page(page_index)
-            matrix = fitz.Matrix(zoom, zoom)
-            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
-            image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+            with self._fitz_lock:
+                page = document.load_page(page_index)
+                matrix = fitz.Matrix(zoom, zoom)
+                pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+                image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+                page_width = page.rect.width
+                page_height = page.rect.height
         except Exception as exc:
             raise PdfRenderError("แสดงตัวอย่าง PDF ไม่สำเร็จ", detail=str(exc)) from exc
 
         if pending_operations:
             image = render_overlay_preview(image, pending_operations, page_index=page_index, zoom=zoom)
 
-        rendered = RenderedPage(image=image, page_width=page.rect.width, page_height=page.rect.height)
+        rendered = RenderedPage(image=image, page_width=page_width, page_height=page_height)
         with self._cache_lock:
             self._cache[cache_key] = rendered
             self._cache.move_to_end(cache_key)
@@ -75,24 +83,34 @@ class PdfRenderer:
 
     def prefetch_page(
         self,
-        working_copy_path: Path,
+        document: fitz.Document,
+        working_copy_path: Path | None,
         page_index: int,
         zoom: float,
         dirty_version: int,
         pending_operations: list[PdfOperation] | None = None,
     ) -> None:
-        """Render and cache a page in a background thread (opens own fitz handle).
+        """Render and cache a page in a background thread.
+
+        Uses the same live in-memory ``document`` the main thread renders
+        from (rather than reopening the working copy from disk), so unsaved
+        edits such as rotation are reflected correctly. Because PyMuPDF is
+        not safe for concurrent calls against a single fitz.Document, every
+        actual page-load/pixmap call is serialized with the main thread via
+        ``_fitz_lock``.
 
         Failures are intentionally silent — this is best-effort only.
         """
-        cache_key = (str(working_copy_path), page_index, zoom, dirty_version)
+        cache_key = (str(working_copy_path or ""), page_index, zoom, dirty_version)
         with self._cache_lock:
             if cache_key in self._cache:
                 return  # already cached, nothing to do
 
         try:
-            with fitz.open(str(working_copy_path)) as doc:
-                page = doc.load_page(page_index)
+            with self._fitz_lock:
+                if not 0 <= page_index < document.page_count:
+                    return
+                page = document.load_page(page_index)
                 matrix = fitz.Matrix(zoom, zoom)
                 pixmap = page.get_pixmap(matrix=matrix, alpha=False)
                 image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)

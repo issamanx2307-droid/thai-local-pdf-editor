@@ -83,3 +83,59 @@ def test_renderer_cache_reuses_rendered_page_on_cache_hit(tmp_path) -> None:
     assert second is first
     assert second.image is first.image
     document.close()
+
+
+def test_prefetch_uses_live_document_not_stale_disk_copy(tmp_path) -> None:
+    """Prefetch must reflect in-memory-only edits (e.g. rotation), not the on-disk copy.
+
+    Regression test for a bug where prefetch_page() reopened the working
+    copy from disk on every background call. Since edits like rotation are
+    only applied to the live in-memory fitz.Document (and not flushed to
+    disk until Save), the stale disk-based prefetch could poison the LRU
+    cache and make the edit appear to vanish when navigating back to the
+    page.
+    """
+    sample_path = tmp_path / "หมุนหน้า" / "rotate-test.pdf"
+    create_sample_pdf(sample_path, pages=2)
+
+    state = DocumentState()
+    document = PdfDocument(state)
+    renderer = PdfRenderer()
+    document.open(sample_path)
+
+    before = renderer.render_page(
+        document.raw,
+        state.working_copy_path,
+        0,
+        state.zoom_level,
+        state.dirty_version,
+    )
+
+    # Rotate page 0 in-memory only — this is NOT written to the working
+    # copy file on disk (that only happens on Save).
+    page = document.get_page(0)
+    page.set_rotation((page.rotation + 90) % 360)
+    state.bump_version()
+
+    # Simulate the background prefetch that fires when the user navigates
+    # away with next/previous.
+    renderer.prefetch_page(
+        document.raw,
+        state.working_copy_path,
+        0,
+        state.zoom_level,
+        state.dirty_version,
+    )
+
+    # Navigating back to page 0 must show the rotation, not a stale
+    # unrotated image poisoned into the cache by prefetch.
+    after = renderer.render_page(
+        document.raw,
+        state.working_copy_path,
+        0,
+        state.zoom_level,
+        state.dirty_version,
+    )
+
+    assert (after.image.width, after.image.height) == (before.image.height, before.image.width)
+    document.close()
