@@ -7,25 +7,29 @@
 
 ---
 
-## 1) เครื่องนี้ Python ไม่ได้อยู่ที่ path เดิมเสมอ
+## 1) เครื่องนี้ Python ไม่ได้อยู่ที่ path เดิมเสมอ (แก้แล้วด้วย `.venv`)
 
-- **ห้ามสมมติ** ว่า python อยู่ที่ `C:\Python314\python.exe` — เคยเป็นแบบนั้นตอน build exe ตัวแรก (`python314.dll` ยังอยู่ใน `dist\ThaiLocalPdfEditor\_internal`) แต่เครื่องเปลี่ยน environment ไปแล้ว
-- ให้เช็คก่อนเสมอ: `where python`
-- ปัจจุบัน (2026-07-23) python ที่ใช้งานได้จริงคือ
-  `C:\Users\WINDOWS\AppData\Local\Programs\Python\Python312\python.exe`
-- โปรเจกต์ **ไม่มี `.venv`** — ใช้ global python ตรงๆ (ไม่ตรงกับที่ `project.md`/`README.md` แนะนำให้สร้าง venv จริงๆ ถ้ามีเวลาควรสร้าง `.venv` แล้ว pin เวอร์ชันให้ตรงกับที่ build exe เพื่อกันปัญหานี้ซ้ำ)
-- `start.bat` เลือก python ตามลำดับ: `.venv\Scripts\python.exe` → fixed path (`C:\Users\WINDOWS\...\Python312\python.exe`) → python จาก PATH — ถ้าย้ายเครื่องอีก ต้องแก้ fixed path ใน `start.bat` ด้วย
+- โปรเจกต์นี้มี **`.venv` แล้ว** (สร้าง 2026-07-23) ให้ใช้ `.venv\Scripts\python.exe` เป็นหลักเสมอ ไม่ต้องพึ่ง python จาก PATH ของเครื่องอีก
+- `requirements.txt` และ `requirements-build.txt` **pin เวอร์ชันตายตัวแล้ว** (ไม่ใช่ `>=`) ตามที่ทดสอบผ่านจริงบนเครื่องนี้ ถ้าจะอัปเดตเวอร์ชัน ให้แก้ไฟล์นี้แล้วรัน `python -m pytest -q` ผ่าน venv ยืนยันก่อนทุกครั้ง
+- ถ้า `.venv` หายไป (ย้ายเครื่อง/ลบทิ้ง) สร้างใหม่ด้วย:
+  ```
+  python -m venv .venv
+  .venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-build.txt
+  ```
+- `start.bat` เลือก python ตามลำดับ: `.venv\Scripts\python.exe` (ใช้อันนี้เกือบตลอด) → fixed path เก่า (`C:\Users\WINDOWS\...\Python312\python.exe`, เผื่อ `.venv` หาย) → python จาก PATH (fallback สุดท้าย)
+- **ห้ามสมมติ** ว่า python อยู่ที่ `C:\Python314\python.exe` — เคยเป็นแบบนั้นตอน build exe ตัวแรก แต่เครื่องเปลี่ยน environment ไปแล้ว ตอนนี้ใช้ `.venv` แทนเพื่อกันปัญหานี้ซ้ำถาวร
 
-## 2) ก่อนรันแอปครั้งแรกในเครื่องใหม่ ให้ลง dependency ก่อน
+## 2) ก่อนรันแอปครั้งแรกในเครื่องใหม่ ให้ลง dependency ก่อน (ผ่าน `.venv`)
 
 ```
-python -m pip install -r requirements.txt
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ถ้าจะ build exe ด้วย ให้ลงเพิ่ม:
 
 ```
-python -m pip install -r requirements-build.txt
+.venv\Scripts\python.exe -m pip install -r requirements-build.txt
 ```
 
 อาการถ้าลืม: `ModuleNotFoundError: No module named 'customtkinter'` ตอนรัน `run_app.py`
