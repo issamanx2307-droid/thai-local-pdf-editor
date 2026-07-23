@@ -32,3 +32,5 @@ Thumbs.db
 # Generated reports and temporary exports
 *.tmp
 *.bak
+syntax_result.txt
+test_result.txt
