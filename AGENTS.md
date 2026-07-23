@@ -69,9 +69,10 @@ Windows ตั้งแต่ Win8 ขึ้นมา **ไม่ยอมให
   ```
 - วิธีแก้ถาวร: ปิด/เปิด Desktop Commander (หรือรีสตาร์ทเครื่อง) ครั้งเดียว แล้ว process ใหม่จะเห็น PATH ที่อัปเดตแล้วโดยไม่ต้องเติมบรรทัดนี้อีก
 
-## 6) บั๊กที่รู้อยู่แล้ว (ดูสถานะก่อนแก้ซ้ำ)
+## 6) บั๊กที่แก้ไปแล้ว (2026-07-23)
 
-- `thai_pdf_editor/app/core/pdf_document.py` เมธอด `open()`: error path เรียก `working_copy_path.unlink(missing_ok=True)` ตรงๆ แทนที่จะใช้ helper `_remove_working_copy()` ที่ retry/chmod รองรับ Windows file lock — ทำให้ `test_invalid_pdf_returns_thai_error_without_crashing` ล้มเหลวเป็น `PermissionError` บน Windows (พบ 2026-07-23 กับ pymupdf เวอร์ชันใหม่)
+- `thai_pdf_editor/app/core/pdf_document.py` เมธอด `open()`: error path เดิมเรียก `working_copy_path.unlink(missing_ok=True)` ตรงๆ ไม่ใช้ helper `_remove_working_copy()` — แก้แล้วให้ใช้ helper เสมอ, ย้าย cleanup ออกมานอก `except` block, เปลี่ยน `LOGGER.exception()` เป็น log ข้อความ traceback ที่ format เป็น string แล้ว (กัน reference ค้าง), และเพิ่ม `gc.collect()` ใน retry loop ของ `_remove_working_copy()`
+- **ข้อควรระวังตอน debug ปัญหานี้**: ถ้าเทสต์ `test_invalid_pdf_returns_thai_error_without_crashing` ยัง fail แบบไฟล์ `_working.pdf` ค้างอยู่ ให้เช็คก่อนว่าเป็นไฟล์ **ขยะเก่าจากการรันเทสต์ครั้งก่อนๆ** ที่ค้างใน `data/temp/` หรือไม่ (glob pattern ของเทสต์นี้ match ได้กับไฟล์เก่าจากรันก่อนหน้าด้วย ไม่ใช่แค่ไฟล์ของรันปัจจุบัน) ลบไฟล์ `*acceptance_unique*_working.pdf` ใน `data/temp/` ทิ้งก่อนสรุปว่าโค้ดยังพัง
 
 ## 7) เช็คสุขภาพระบบก่อนเริ่มงานใหญ่
 

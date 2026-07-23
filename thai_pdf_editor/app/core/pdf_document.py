@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import shutil
+import time
+import traceback
 from pathlib import Path
 
 import fitz
@@ -42,17 +45,33 @@ class PdfDocument:
         self.close()
         working_copy_path = make_working_copy_path(source_path)
 
+        open_error: str | None = None
+        document: fitz.Document | None = None
         try:
             shutil.copyfile(source_path, working_copy_path)
             document = fitz.open(str(working_copy_path))
         except Exception as exc:
-            if working_copy_path.exists():
-                working_copy_path.unlink(missing_ok=True)
-            LOGGER.exception("failed to open pdf path=%s", source_path)
-            raise PdfOpenError("เปิดไฟล์ PDF ไม่สำเร็จ", detail=str(exc)) from exc
+            # Log a pre-formatted traceback string rather than passing
+            # exc_info=True. Keeping a live traceback object referenced
+            # (by our code, or by logging/pytest log capture) keeps the
+            # underlying MuPDF stream object alive, which on Windows
+            # keeps the working copy file locked and the unlink below
+            # fails.
+            LOGGER.error(
+                "failed to open pdf path=%s\n%s", source_path, traceback.format_exc()
+            )
+            open_error = str(exc)
 
+        if open_error is not None:
+            if working_copy_path.exists():
+                _remove_working_copy(working_copy_path)
+            raise PdfOpenError("เปิดไฟล์ PDF ไม่สำเร็จ", detail=open_error)
+
+        assert document is not None
         if document.page_count <= 0:
             document.close()
+            if working_copy_path.exists():
+                _remove_working_copy(working_copy_path)
             raise PdfOpenError("ไฟล์ PDF ไม่มีหน้าให้แสดง")
 
         self._doc = document
@@ -83,13 +102,24 @@ class PdfDocument:
 
 
 def _remove_working_copy(path: Path) -> None:
-    try:
-        path.unlink()
-    except PermissionError:
+    # A failed fitz.open() can leave the underlying MuPDF stream object
+    # alive via a Python reference cycle (frame <-> traceback), which
+    # only the cyclic garbage collector reclaims, not plain refcounting.
+    # Until it's collected, Windows keeps the file handle open and any
+    # unlink() attempt raises PermissionError. Forcing gc.collect() and
+    # retrying a few times reliably releases it.
+    for attempt in range(8):
+        gc.collect()
         try:
-            path.chmod(0o666)
             path.unlink()
+            return
+        except PermissionError:
+            try:
+                path.chmod(0o666)
+            except OSError:
+                pass
+            time.sleep(0.05 * (attempt + 1))
         except OSError:
             LOGGER.warning("could not remove working copy path=%s", path)
-    except OSError:
-        LOGGER.warning("could not remove working copy path=%s", path)
+            return
+    LOGGER.warning("could not remove working copy path=%s (still locked)", path)
