@@ -102,7 +102,12 @@ export type UploadedPdfResponse = {
   page_count: number
 }
 
-export async function getBridgeHealth(): Promise<{ ok: boolean; bridge: string; state: WorkerState }> {
+export async function getBridgeHealth(): Promise<{
+  ok: boolean
+  bridge: string
+  state: WorkerState
+  default_downloads_dir?: string
+}> {
   return fetchJson('/api/health')
 }
 

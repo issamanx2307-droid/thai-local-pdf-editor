@@ -50,6 +50,10 @@ ALLOWED_DEV_ORIGINS = {
     "http://localhost:5173",
     "http://127.0.0.1:5174",
     "http://localhost:5174",
+    # Tauri v1 custom protocol
+    "tauri://localhost",
+    # Tauri v2 production WebView (Windows/Linux use https://tauri.localhost)
+    "https://tauri.localhost",
 }
 
 
@@ -95,6 +99,9 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "bridge": BRIDGE_NAME,
                     "state": state_payload(self.server.session.state),
+                    # Portable per-user default (no hardcoded username), so
+                    # the React UI never needs to guess a Windows path.
+                    "default_downloads_dir": str(Path.home() / "Downloads"),
                 }
             )
             return
@@ -211,6 +218,12 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         if origin in ALLOWED_DEV_ORIGINS:
             return origin
+        # Do NOT fall back to "*". Binding to 127.0.0.1 does not stop a
+        # malicious page open in the same browser from calling this
+        # bridge (localhost is reachable from any tab on this machine);
+        # a wildcard CORS origin would let that page also read the
+        # response (file paths, exported content, etc). Unknown origins
+        # get the default origin instead, same as before.
         return DEFAULT_DEV_ORIGIN
 
 

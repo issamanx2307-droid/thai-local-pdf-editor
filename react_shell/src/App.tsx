@@ -210,6 +210,7 @@ function App() {
   const [jpgPageScope, setJpgPageScope] = useState<PageScope>('current')
   const [jpgDpi, setJpgDpi] = useState('150')
   const [jpgQuality, setJpgQuality] = useState('95')
+  const [jpgOutputDir, setJpgOutputDir] = useState('')
   const [batchJpgFileNames, setBatchJpgFileNames] = useState<string[]>([])
   const [activeToolTab, setActiveToolTab] = useState<ToolTab>('edit')
   const [isGuideOpen, setIsGuideOpen] = useState(false)
@@ -247,6 +248,23 @@ function App() {
     window.addEventListener('beforeunload', warnBeforeUnload)
     return () => window.removeEventListener('beforeunload', warnBeforeUnload)
   }, [dirty])
+
+  useEffect(() => {
+    let cancelled = false
+    getBridgeHealth()
+      .then((health) => {
+        if (!cancelled && health.default_downloads_dir) {
+          setJpgOutputDir((current) => (current ? current : health.default_downloads_dir ?? current))
+        }
+      })
+      .catch(() => {
+        // Bridge not reachable yet; the JPG export field just stays empty
+        // and the Python worker falls back to its own default directory.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const confirmDiscardDirty = useCallback(() => {
     if (!dirty) {
@@ -1342,22 +1360,24 @@ function App() {
           page_scope: jpgPageScope,
           dpi: Number.isFinite(dpi) ? dpi : 150,
           quality: Number.isFinite(quality) ? quality : 95,
+          destination_dir: jpgOutputDir.trim(),
         },
       })
       applyResponse(response)
       setBridgeStatus('ready')
       const count = typeof response.payload.count === 'number' ? response.payload.count : 0
+      const destDir = typeof response.payload.destination_dir === 'string' ? response.payload.destination_dir : jpgOutputDir
       const fileNames = Array.isArray(response.payload.file_names)
         ? response.payload.file_names.filter((name): name is string => typeof name === 'string')
         : []
-      setStatusMessage(`ส่งออก JPG แล้ว ${count} ไฟล์${fileNames.length ? `: ${fileNames.slice(0, 2).join(', ')}` : ''}`)
+      setStatusMessage(`ส่งออก JPG แล้ว ${count} ไฟล์ → ${destDir}${fileNames.length ? ` (${fileNames.slice(0, 2).join(', ')})` : ''}`)
     } catch (error) {
       setBridgeStatus('error')
       setStatusMessage(error instanceof Error ? error.message : 'ส่งออก JPG ไม่สำเร็จ')
     } finally {
       setIsBusy(false)
     }
-  }, [applyResponse, hasDocument, jpgDpi, jpgPageScope, jpgQuality, selectedPageIndex])
+  }, [applyResponse, hasDocument, jpgDpi, jpgOutputDir, jpgPageScope, jpgQuality, selectedPageIndex])
 
   const batchExportJpgFiles = useCallback(
     async (fileList: FileList | null | undefined) => {
@@ -1383,6 +1403,7 @@ function App() {
             source_paths: uploadedPdfs.map((item) => item.path),
             dpi: Number.isFinite(dpi) ? dpi : 150,
             quality: Number.isFinite(quality) ? quality : 95,
+            destination_dir: jpgOutputDir.trim(),
           },
         })
         applyResponse(response)
@@ -1403,7 +1424,7 @@ function App() {
         setIsBusy(false)
       }
     },
-    [applyResponse, jpgDpi, jpgQuality],
+    [applyResponse, jpgDpi, jpgOutputDir, jpgQuality],
   )
 
   const openGuide = useCallback(() => {
@@ -1489,6 +1510,7 @@ function App() {
           imageOverlayWidth={imageOverlayWidth}
           isBusy={isBusy}
           jpgDpi={jpgDpi}
+          jpgOutputDir={jpgOutputDir}
           jpgPageScope={jpgPageScope}
           jpgQuality={jpgQuality}
           metadataFields={metadataFields}
@@ -1512,6 +1534,7 @@ function App() {
           onCropMarginPercentChange={setCropMarginPercent}
           onImageOverlayWidthChange={setImageOverlayWidth}
           onJpgDpiChange={setJpgDpi}
+          onJpgOutputDirChange={setJpgOutputDir}
           onJpgPageScopeChange={setJpgPageScope}
           onJpgQualityChange={setJpgQuality}
           onLoadFormFields={() => void loadFormFields()}
@@ -2164,6 +2187,7 @@ function ToolPanel({
   imageOverlayWidth,
   isBusy,
   jpgDpi,
+  jpgOutputDir,
   jpgPageScope,
   jpgQuality,
   metadataFields,
@@ -2185,6 +2209,7 @@ function ToolPanel({
   onFormFieldValueChange,
   onImageOverlayWidthChange,
   onJpgDpiChange,
+  onJpgOutputDirChange,
   onJpgPageScopeChange,
   onJpgQualityChange,
   onLoadFormFields,
@@ -2223,6 +2248,7 @@ function ToolPanel({
   imageOverlayWidth: string
   isBusy: boolean
   jpgDpi: string
+  jpgOutputDir: string
   jpgPageScope: PageScope
   jpgQuality: string
   metadataFields: MetadataFields
@@ -2244,6 +2270,7 @@ function ToolPanel({
   onFormFieldValueChange: (xref: number, value: string | boolean) => void
   onImageOverlayWidthChange: (value: string) => void
   onJpgDpiChange: (value: string) => void
+  onJpgOutputDirChange: (value: string) => void
   onJpgPageScopeChange: (value: PageScope) => void
   onJpgQualityChange: (value: string) => void
   onLoadFormFields: () => void
@@ -2645,6 +2672,17 @@ function ToolPanel({
               value={jpgQuality}
             />
           </div>
+          <label className="field-label" htmlFor="jpg-output-dir">โฟลเดอร์ปลายทาง</label>
+          <input
+            id="jpg-output-dir"
+            aria-label="โฟลเดอร์ปลายทาง JPG"
+            disabled={isBusy}
+            onChange={(event) => onJpgOutputDirChange(event.currentTarget.value)}
+            placeholder="เว้นว่างเพื่อใช้โฟลเดอร์เริ่มต้น"
+            style={{ fontFamily: 'monospace', fontSize: '11px' }}
+            type="text"
+            value={jpgOutputDir}
+          />
           <button className="primary-action" disabled={isBusy || !hasDocument} onClick={onExportJpg} type="button">
             ส่งออก JPG
           </button>
