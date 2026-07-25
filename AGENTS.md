@@ -34,7 +34,11 @@ python -m venv .venv
 
 อาการถ้าลืม: `ModuleNotFoundError: No module named 'customtkinter'` ตอนรัน `run_app.py`
 
-## 3) Build exe
+## 3) Build exe (Tkinter app — **เลิกใช้แล้ว 2026-07-25**, เก็บโค้ดไว้เป็น fallback เท่านั้น)
+
+**Tauri app (ข้อ 9) เป็นตัวหลักที่ผู้ใช้ใช้งานจริงแล้ว** ไฟล์ build เดิมที่ `dist\ThaiLocalPdfEditor\` ถูกลบไปแล้ว (source ที่ `thai_pdf_editor/` ยังอยู่ครบ, bridge เดียวกันถูกใช้เป็น backend ของ Tauri app ด้วย) ห้ามลบ source หรือเทสต์ของ `thai_pdf_editor/` เพราะ Tauri sidecar (`run_react_bridge.py` → `react_shell/local_bridge.py`) import โค้ดชุดนี้ตรงๆ
+
+ถ้าจำเป็นต้อง build .exe แบบ Tkinter เดิมอีกครั้ง (เช่น debug เทียบ behavior):
 
 รันผ่าน `cmd /c scripts\build_exe.bat` เท่านั้น (ไม่ใช้ `.spec` ตรงๆ เพราะ script นี้ generate spec ใหม่ทุกครั้งจาก CLI flags ใน `packaging\ThaiLocalPdfEditor.spec`)
 
@@ -46,7 +50,7 @@ python -m venv .venv
 
 Windows ตั้งแต่ Win8 ขึ้นมา **ไม่ยอมให้สคริปต์ตั้ง default app แทนผู้ใช้โดยอัตโนมัติ** (ป้องกัน malware hijack file association) ดังนั้น:
 
-- ทำได้แค่ "register" แอปเข้าระบบผ่าน registry (ProgID `ThaiPDFEditor.pdf` ใต้ `HKCU\Software\Classes`, capabilities ใต้ `HKCU\Software\ThaiPDFEditor`, entry ใน `HKCU\Software\RegisteredApplications`)
+- **ตอนนี้ ProgID ที่ถูกต้องคือ `Thai Local PDF`** (Tauri สร้างให้อัตโนมัติตอนติดตั้ง จาก `fileAssociations` ใน `tauri.conf.json`) ProgID เก่า `ThaiPDFEditor.pdf` (ของ Tkinter exe) ถูกลบออกจาก registry แล้ว (2026-07-25) — ถ้าเจอ ProgID นี้โผล่มาอีกแปลว่ามีอะไรสร้างมันขึ้นมาใหม่ ให้เช็คว่าทำไม
 - การตั้งเป็น default จริงต้องให้ **ผู้ใช้กดเอง** ผ่านทางใดทางหนึ่ง:
   - `Start-Process 'ms-settings:defaultapps'` แล้วค้นหา `.pdf`
   - หรือ `rundll32.exe shell32.dll,OpenAs_RunDLL "<real .pdf file>"` แล้วติ๊ก "Always use this app"
@@ -54,7 +58,7 @@ Windows ตั้งแต่ Win8 ขึ้นมา **ไม่ยอมให
   ```powershell
   Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.pdf\UserChoice' | Select-Object ProgId
   ```
-- ไอคอนไฟล์ .pdf ที่ Explorer แสดง มาจาก `DefaultIcon` ของ ProgID ที่เป็น default อยู่จริง — ถ้าไม่ใช่ `ThaiPDFEditor.pdf` ไอคอนจะไม่เปลี่ยนแม้ตั้ง registry ของเราไว้แล้ว (ต้องเช็คข้อ UserChoice ก่อนเสมอถ้าไอคอนไม่ขึ้น)
+- ไอคอนไฟล์ .pdf ที่ Explorer แสดง มาจาก `DefaultIcon` ของ ProgID ที่เป็น default อยู่จริง — ถ้าไม่ตรงกับที่ตั้งไว้ ไอคอนจะไม่เปลี่ยน (ต้องเช็คข้อ UserChoice ก่อนเสมอถ้าไอคอนไม่ขึ้น)
 - หลังแก้ registry ไอคอน ให้ล้าง icon cache: `ie4uinit.exe -ClearIconCache` แล้ว restart explorer (`Stop-Process -Name explorer -Force; Start-Process explorer.exe`)
 
 ## 5) Desktop Commander เครื่องนี้ (สำคัญมากสำหรับ AI ที่ใช้เครื่องมือ)
@@ -87,10 +91,36 @@ python scripts/release_qa.py
 
 ถ้า pytest แดง ให้ดูว่าเป็นบั๊กเดิมที่รู้อยู่แล้ว (ข้อ 6) หรือของใหม่ ก่อนจะเดินหน้าฟีเจอร์ต่อ
 
-## 8) React migration
+## 8) React migration → **Tauri app คือของจริงแล้ว ไม่ใช่แค่แผนอีกต่อไป**
 
-มีแผนอยู่ที่ `REACT_MIGRATION_PLAN.md` แต่ยังไม่เริ่ม (ค้างที่ Phase 0 — freeze baseline + git tag) ห้ามเริ่มแก้ UI เป็น React โดยไม่ยืนยันกับผู้ใช้ก่อน เพราะเป็นงานใหญ่นอกสโคป v1
+`REACT_MIGRATION_PLAN.md` เดิมวางแผนไว้เฉยๆ แต่ตอนนี้ (2026-07-25) build จริงแล้วและ **ผู้ใช้เปลี่ยนมาใช้ Tauri app เป็นหลักแทน Tkinter exe แล้ว** ดูข้อ 9
+
+## 9) Tauri app (ตัวหลักที่ใช้งานจริงตอนนี้)
+
+**สถาปัตยกรรม**: `react_shell/src/` (React/Vite UI) + `react_shell/src-tauri/` (Rust shell) เรียก sidecar process `pdf-bridge.exe` (PyInstaller build ของ `run_react_bridge.py` → `react_shell/local_bridge.py`, import โค้ด `thai_pdf_editor/` ตรงๆ) bridge ฟัง HTTP ที่ `127.0.0.1:5178`
+
+**ติดตั้งอยู่ที่**: `%LOCALAPPDATA%\Programs\Thai Local PDF Editor\` (per-user install, ไม่ต้อง admin) — **ห้าม** ปล่อยให้ installer ติดตั้งที่ path default ที่มันจำมาจาก registry เดิม (เจอปัญหานี้มาแล้ว — NSIS จำ `InstallLocation` เก่าจาก registry แม้ uninstall ไปแล้วก็ยังจำอยู่ถ้า registry key ไม่ถูกลบสมบูรณ์) ระบุ path เองเสมอตอน install แบบ silent:
+```powershell
+Start-Process -FilePath "<installer.exe>" -ArgumentList "/S", "/D=$env:LOCALAPPDATA\Programs\Thai Local PDF Editor" -Wait
+```
+
+**Build ลำดับที่ถูกต้อง** (ต้อง build sidecar ก่อนเสมอ ไม่งั้น Tauri จะห่อ sidecar เก่าที่ค้างอยู่):
+```
+scripts\build_react_bridge.bat        REM 1. build sidecar (PyInstaller) ก่อน
+cd react_shell
+set NODE_ENV=development
+npm run tauri:build                    REM 2. ถึงจะ build ตัว Tauri app (ห่อ sidecar เข้าไปด้วย)
+```
+**เคยพลาดมาแล้ว**: แก้ `local_bridge.py` แล้วลืม rebuild sidecar exe ก่อน build tauri:build → ได้ app ใหม่ที่ยังมีบั๊กเดิมฝังอยู่ใน sidecar เพราะ Tauri แค่ก็อปปี้ `binaries/pdf-bridge-x86_64-pc-windows-msvc.exe` ที่มีอยู่แล้วเข้าไปห่อ ไม่ได้ build ให้ใหม่
+
+**NODE_ENV=production ตั้งไว้ระดับระบบ** — ทำให้ `npm install` ข้าม devDependencies เงียบๆ (eslint/vite/typescript หายจาก `node_modules`) ต้อง `set NODE_ENV=development` นำหน้า `npm install`/`npm run tauri:build` เสมอในเซสชันนี้
+
+**Sidecar เป็น PyInstaller `--onefile` → มี process ซ้อน 2 ชั้น**: bootloader process spawn child process จริงอีกที การฆ่าแค่ `CommandChild.kill()` (จาก tauri-plugin-shell) ฆ่าได้แค่ bootloader ตัวลูกไม่ตาย ต้องเสริม `taskkill /F /IM pdf-bridge.exe /T` ใน `src-tauri/src/lib.rs` ด้วย (ดู `kill_pdf_bridge_tree()`) ถึงจะฆ่าครบทั้ง process tree ตอนปิดแอป — ทดสอบต้องปิดแอปแบบ **graceful** (`$proc.CloseMainWindow()` หรือกด X จริง) เท่านั้น `Stop-Process -Force` จะข้าม cleanup code ทุกแอปอยู่แล้ว ไม่ใช่การทดสอบที่ถูกต้อง
+
+**ความปลอดภัย CORS**: `local_bridge.py` `_allowed_origin()` ต้องคืนค่า origin ที่รู้จักเท่านั้น (`ALLOWED_DEV_ORIGINS`/`DEFAULT_DEV_ORIGIN`) **ห้ามคืน `"*"` แม้จะบอกว่า bind 127.0.0.1 แล้วปลอดภัย** — เว็บอันตรายที่เปิดในเบราว์เซอร์เครื่องเดียวกันยิง fetch เข้า localhost ได้ปกติ ถ้า CORS เป็น `*` เว็บนั้นอ่าน response กลับไปได้ด้วย มีเทสต์ (`tests/test_react_bridge.py`) จับเรื่องนี้อยู่แล้ว ถ้าแก้แล้ว pytest แดงตรงนี้คือของจริง
+
+**`react_shell/src-tauri/binaries/` gitignore ไว้** (exe compiled ~34MB, machine-specific) build ใหม่ทุกครั้งด้วย `scripts\build_react_bridge.bat` แทนการ commit
 
 ---
 
-_อัปเดตล่าสุด: 2026-07-23 หลังแก้ปัญหา environment drift (python path, missing deps, missing icon, git ไม่อยู่ใน PATH)_
+_อัปเดตล่าสุด: 2026-07-25 — Tauri app กลายเป็นตัวหลักที่ใช้งานจริง, Tkinter exe เลิกใช้แล้ว, ProgID เก่าถูกลบออกจาก registry

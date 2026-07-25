@@ -1,3 +1,4 @@
+use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use tauri_plugin_shell::process::CommandChild;
@@ -78,6 +79,23 @@ pub fn run() {
                     let _ = child.kill();
                 }
             }
+            kill_pdf_bridge_tree();
         }
     });
+}
+
+/// `CommandChild::kill()` only terminates the direct child process it holds
+/// a handle to. The bridge is built with PyInstaller `--onefile`, which on
+/// Windows runs as a small bootloader that unpacks itself and launches a
+/// *second*, separate process to actually run the Python code. Killing the
+/// bootloader does not kill that grandchild, so it's left running (still
+/// bound to the bridge port) after the app closes. `taskkill /T` kills the
+/// whole process tree by image name, which reliably takes out both. This
+/// app is the only thing that spawns pdf-bridge.exe, so it's safe to target
+/// every instance of it rather than tracking PIDs through the bootloader.
+fn kill_pdf_bridge_tree() {
+    let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/IM", "pdf-bridge.exe", "/T"])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .status();
 }
