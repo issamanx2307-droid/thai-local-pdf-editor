@@ -145,4 +145,18 @@ if not length_text:
 
 ---
 
-_อัปเดตล่าสุด: 2026-07-27 — แก้ bug Content-Length fallback ใน local_bridge.py ที่ทำให้เปิดไฟล์ PDF ไม่ได้ใน Tauri WebView
+## 11) บั๊ก CORS origin ไม่ตรง — `http://tauri.localhost` vs `https://tauri.localhost` (แก้แล้ว 2026-07-27)
+
+**อาการ**: หลังแก้ข้อ 10 แล้ว ยังเปิดไฟล์ไม่ได้อยู่ดี — UI ขึ้น "Bridge: error" ค้างตลอด และ toast แดง "ไม่สามารถเชื่อมต่อบริการประมวลผล PDF ได้ กรุณาลองใหม่อีกครั้ง" (ข้อความนี้มาจาก `getBridgeHealth()` ใน `workerApi.ts` ที่ retry 10 ครั้ง/300ms แล้วยัง fail) ทดสอบยิง API ตรงด้วย python script (ไม่ผ่าน browser) กลับสำเร็จ 200 OK ปกติทุกครั้ง — ทำให้เข้าใจผิดว่า backend ปกติดี
+
+**สาเหตุจริง**: `ALLOWED_DEV_ORIGINS` ใน `local_bridge.py` มีแค่ `"https://tauri.localhost"` (ตามเอกสาร Tauri v2) แต่ **WebView2 ของ Tauri v2 บน Windows 11 เครื่องนี้ส่ง Origin จริงเป็น `http://tauri.localhost`** (http ธรรมดา ไม่มี s) เมื่อ origin ไม่ตรงกับ allowlist เป๊ะๆ `_allowed_origin()` จะ fallback ไปคืน `DEFAULT_DEV_ORIGIN` แทน (`http://127.0.0.1:5173`) ซึ่งไม่ตรงกับ origin จริงของ request → browser บล็อก CORS เงียบๆ โดย backend เองมองว่าตอบ 200 ปกติ (เห็นได้เฉพาะจาก DevTools/browser console ไม่ใช่จาก server log) — เป็นเหตุผลว่าทำไมทดสอบยิง API ตรงด้วย python (ไม่มี CORS enforcement) ถึงดูปกติตลอดทั้งที่แอปจริงพังอยู่
+
+**วิธี debug ที่ได้ผล**: เติม log origin ชั่วคราวใน `_allowed_origin()` เขียนลงไฟล์ (`self.headers.get("Origin")` ทุก request) แล้ว build sidecar ใหม่, copy ทับตัวที่ติดตั้งอยู่ตรงๆที่ `%LOCALAPPDATA%\Programs\Thai Local PDF Editor\pdf-bridge.exe` (ไม่ต้อง build/install ทั้ง Tauri app ใหม่ทุกรอบ เร็วกว่ามาก), เปิดแอปทิ้งไว้เฉยๆ (ไม่ต้องกดอะไร เพราะแอปเรียก `/api/health` เองตอน mount) แล้วอ่าน log — เห็น origin จริงทันที
+
+**วิธีแก้**: เพิ่ม `"http://tauri.localhost"` เข้า `ALLOWED_DEV_ORIGINS` (เก็บ `https://tauri.localhost` ไว้ด้วยเผื่อ WebView2 เวอร์ชันอื่นใช้ scheme ต่างกัน)
+
+**บทเรียน**: ทดสอบ bridge ด้วย python/urllib **ไม่เพียงพอ** สำหรับบั๊กที่เกี่ยวกับ CORS เพราะ urllib ไม่ enforce CORS เหมือน browser จริง ต้องส่ง `Origin` header ที่ตรงกับของจริงไปด้วยเสมอตอนจำลอง request (ดูค่าจริงได้จาก log ข้างบน ไม่ใช่เดาจากเอกสาร Tauri)
+
+---
+
+_อัปเดตล่าสุด: 2026-07-27 — แก้บั๊ก CORS origin mismatch (`http://tauri.localhost`) ที่ทำให้เปิดไฟล์ PDF ไม่ได้เลยใน Tauri app ตัวจริง
