@@ -422,6 +422,15 @@ function App() {
       if (!file) {
         return
       }
+
+      const nativePath = (file as File & { path?: string }).path
+      if (typeof nativePath === 'string' && nativePath) {
+        if (openPdfInputRef.current) {
+          openPdfInputRef.current.value = ''
+        }
+        return openPdfByPath(nativePath)
+      }
+
       if (!(await confirmDiscardDirty())) {
         if (openPdfInputRef.current) {
           openPdfInputRef.current.value = ''
@@ -464,7 +473,7 @@ function App() {
         }
       }
     },
-    [applyResponse, confirmDiscardDirty],
+    [applyResponse, confirmDiscardDirty, openPdfByPath],
   )
 
   const renderPage = useCallback(
