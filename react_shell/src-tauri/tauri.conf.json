@@ -36,6 +36,9 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/pdf-bridge"],
+    "resources": {
+      "binaries/_internal": "_internal"
+    },
     "fileAssociations": [
       {
         "ext": ["pdf"],

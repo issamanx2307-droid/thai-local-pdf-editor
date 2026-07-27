@@ -159,4 +159,20 @@ if not length_text:
 
 ---
 
-_อัปเดตล่าสุด: 2026-07-27 — แก้บั๊ก CORS origin mismatch (`http://tauri.localhost`) ที่ทำให้เปิดไฟล์ PDF ไม่ได้เลยใน Tauri app ตัวจริง
+## 12) sidecar cold start ช้า — เปลี่ยนจาก `--onefile` เป็น `--onedir` (แก้แล้ว 2026-07-27)
+
+**อาการ**: default app ตั้งสำเร็จ เปิดไฟล์ได้แล้ว แต่ผู้ใช้รายงานว่าเปิดไฟล์ "ช้ากว่าปกติ" (เทียบกับ Tkinter exe เดิม)
+
+**สาเหตุ**: `pdf-bridge.exe` build แบบ `--onefile` ต้องแตกไฟล์ทั้งหมด (PyMuPDF, Pillow ฯลฯ) ไปที่ temp dir **ทุกครั้ง**ที่เปิดแอปใหม่ วัดจริงได้ ~3.5 วินาที กว่า bridge จะ listen พร้อมใช้งาน ทุกครั้งไม่มีเว้น เพราะ onefile ไม่มี caching ข้าม process
+
+**วิธีแก้**: เปลี่ยน `scripts\build_react_bridge.bat` เป็น `--onedir` แทน ผลลัพธ์เป็นโฟลเดอร์ (`pdf-bridge.exe` + `_internal/`) ไม่ใช่ exe เดี่ยว ต้องปรับ:
+- `scripts\build_react_bridge.bat`: build ไป `build\react_bridge_dist\` ก่อน แล้ว `move` ทั้ง `pdf-bridge.exe` และโฟลเดอร์ `_internal` เข้า `react_shell\src-tauri\binaries\`
+- `tauri.conf.json`: เพิ่ม `"resources": {"binaries/_internal": "_internal"}` เพื่อให้ Tauri bundle โฟลเดอร์ `_internal` ไปวางเป็น sibling ของ sidecar exe ที่ install directory (PyInstaller onedir **ต้องมี** `_internal` อยู่ข้างๆ exe ถึงจะรันได้ — แค่ externalBin อย่างเดียวไม่พอ เพราะมันก็อปแค่ไฟล์ exe เดียว)
+
+**ผลวัดจริงหลังแก้**: เปิดครั้งแรกหลังติดตั้งยังช้า (~8s เพราะ Windows/AV สแกนไฟล์ย่อยจำนวนมากใน `_internal` ครั้งแรก) แต่เปิดครั้งถัดไปเหลือ **~1.3-1.4 วินาที** (ดีขึ้นกว่า onefile ที่ 3.5s คงที่ทุกครั้งอย่างชัดเจน เพราะ onedir ไม่ต้องแตกไฟล์ซ้ำ)
+
+**ทดสอบ cold start time**: ปิด app+pdf-bridge, `Start-Process app.exe`, poll TCP connect ไปพอร์ต 5178 ทุก 150ms จนกว่าจะต่อได้ (`Invoke-WebRequest`/`Get-Process` แบบ blocking loop เคยค้างมาแล้ว ให้ใช้ `System.Net.Sockets.TcpClient` แบบ async connect + short timeout แทน)
+
+---
+
+_อัปเดตล่าสุด: 2026-07-27 — เปลี่ยน sidecar build เป็น --onedir ลด cold start จาก ~3.5s เหลือ ~1.3s
