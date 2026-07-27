@@ -165,6 +165,33 @@ def test_react_bridge_upload_pdf_opens_and_renders_single_document(tmp_path) -> 
         server.server_close()
 
 
+def test_react_bridge_accepts_chunked_pdf_upload_without_stalling(tmp_path) -> None:
+    """A WebView chunked upload must be read without waiting for socket EOF."""
+    source_path = create_sample_pdf(tmp_path / "chunked-open.pdf", pages=1)
+    server = create_bridge_server(port=0, preview_dir=tmp_path / "previews")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        port = int(server.server_address[1])
+        response = _chunked_json_request(
+            port,
+            "/api/upload-pdf",
+            {
+                "file_name": source_path.name,
+                "data_url": f"data:application/pdf;base64,{base64.b64encode(source_path.read_bytes()).decode('ascii')}",
+            },
+        )
+
+        assert response["status"] == 200
+        assert response["body"]["ok"] is True
+        assert Path(response["body"]["path"]).exists()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_react_bridge_upload_pdf_and_merge_through_worker(tmp_path) -> None:
     """Bridge should accept local PDF uploads and merge them through the worker session."""
     first = create_sample_pdf(tmp_path / "first.pdf", pages=2)
@@ -291,6 +318,32 @@ def _json_request(port: int, method: str, path: str, payload: dict[str, Any] | N
         **raw,
         "body": json.loads(raw["body"].decode("utf-8")),
     }
+
+
+def _chunked_json_request(port: int, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Send a chunked JSON request as Chromium/WebView may do."""
+    body = json.dumps(payload).encode("utf-8")
+    midpoint = max(1, len(body) // 2)
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        connection.putrequest("POST", path)
+        connection.putheader("Content-Type", "application/json")
+        connection.putheader("Transfer-Encoding", "chunked")
+        connection.endheaders()
+        for chunk in (body[:midpoint], body[midpoint:]):
+            connection.send(f"{len(chunk):X}\r\n".encode("ascii"))
+            connection.send(chunk)
+            connection.send(b"\r\n")
+        connection.send(b"0\r\n\r\n")
+        response = connection.getresponse()
+        raw_body = response.read()
+        return {
+            "status": response.status,
+            "headers": dict(response.getheaders()),
+            "body": json.loads(raw_body.decode("utf-8")),
+        }
+    finally:
+        connection.close()
 
 
 def _raw_request(port: int, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:

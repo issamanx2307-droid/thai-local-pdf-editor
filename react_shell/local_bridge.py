@@ -45,6 +45,10 @@ BRIDGE_NAME = "thai-pdf-react-bridge"
 DEFAULT_DEV_ORIGIN = "http://127.0.0.1:5173"
 MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_UPLOAD_PDF_BYTES = 80 * 1024 * 1024
+# A PDF upload is JSON with a base64 data URL, so its request body can be
+# roughly 4/3 of the PDF limit. Keep one bound for every JSON endpoint.
+MAX_JSON_REQUEST_BYTES = 120 * 1024 * 1024
+MAX_CHUNK_HEADER_BYTES = 1024
 UPLOAD_IMAGE_DIR = TEMP_DIR / "react_bridge_uploads"
 UPLOAD_PDF_DIR = TEMP_DIR / "react_bridge_pdf_uploads"
 ALLOWED_DEV_ORIGINS = {
@@ -54,8 +58,12 @@ ALLOWED_DEV_ORIGINS = {
     "http://localhost:5174",
     # Tauri v1 custom protocol
     "tauri://localhost",
-    # Tauri v2 production WebView (Windows/Linux use https://tauri.localhost)
+    # Tauri v2 production WebView (Windows/Linux use https://tauri.localhost
+    # per Tauri's docs, but the actual WebView2 origin observed on Windows
+    # 11 is plain http://tauri.localhost — keep both so this doesn't regress
+    # again if the scheme differs across WebView2 versions).
     "https://tauri.localhost",
+    "http://tauri.localhost",
 }
 
 LOGGER = logging.getLogger("thai_pdf_editor.react_bridge")
@@ -156,32 +164,38 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
 
     def _read_json(self) -> dict[str, Any] | None:
         length_text = self.headers.get("Content-Length", "")
-        LOGGER.info("_read_json path=%s Content-Length=%r Origin=%r", self.path, length_text, self.headers.get("Origin"))
-        if not length_text:
-            # Tauri WebView may omit Content-Length for small bodies; fall back
-            # to reading until EOF on the rfile by using a generous upper bound.
-            LOGGER.warning("No Content-Length header — reading up to 10MB")
-            try:
-                raw_body = self.rfile.read(10 * 1024 * 1024)
-                LOGGER.info("Read %d bytes without Content-Length", len(raw_body))
-                body = json.loads(raw_body.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                LOGGER.error("JSON parse failed (no Content-Length): %s", exc)
-                self._send_error(HTTPStatus.BAD_REQUEST, "invalid json body")
-                return None
-            if not isinstance(body, dict):
-                self._send_error(HTTPStatus.BAD_REQUEST, "json body must be an object")
-                return None
-            return body
+        transfer_encoding = self.headers.get("Transfer-Encoding", "")
+        LOGGER.info(
+            "_read_json path=%s Content-Length=%r Transfer-Encoding=%r Origin=%r",
+            self.path,
+            length_text,
+            transfer_encoding,
+            self.headers.get("Origin"),
+        )
+
         try:
-            length = int(length_text)
+            if length_text:
+                length = int(length_text)
+                if length < 0:
+                    raise ValueError("negative content length")
+                if length > MAX_JSON_REQUEST_BYTES:
+                    self._send_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request body too large")
+                    return None
+                raw_body = self.rfile.read(length)
+                if len(raw_body) != length:
+                    raise ValueError("incomplete request body")
+            elif any(item.strip().lower() == "chunked" for item in transfer_encoding.split(",")):
+                raw_body = self._read_chunked_body()
+            else:
+                # There is no EOF marker for a keep-alive HTTP request. Reading
+                # until EOF here would hang the UI when a WebView omits the
+                # header, which was the cause of PDF open requests stalling.
+                self._send_error(HTTPStatus.LENGTH_REQUIRED, "Content-Length or chunked transfer encoding is required")
+                return None
+            body = json.loads(raw_body.decode("utf-8"))
         except ValueError:
             self._send_error(HTTPStatus.BAD_REQUEST, "invalid content length")
             return None
-
-        try:
-            raw_body = self.rfile.read(length)
-            body = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             self._send_error(HTTPStatus.BAD_REQUEST, "invalid json body")
             return None
@@ -190,6 +204,34 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
             self._send_error(HTTPStatus.BAD_REQUEST, "json body must be an object")
             return None
         return body
+
+    def _read_chunked_body(self) -> bytes:
+        """Read and validate a HTTP/1.1 chunked request body within our limit."""
+        chunks: list[bytes] = []
+        total_size = 0
+        while True:
+            size_line = self.rfile.readline(MAX_CHUNK_HEADER_BYTES + 1)
+            if not size_line or len(size_line) > MAX_CHUNK_HEADER_BYTES or not size_line.endswith(b"\r\n"):
+                raise ValueError("invalid chunk header")
+            try:
+                chunk_size = int(size_line[:-2].split(b";", 1)[0], 16)
+            except ValueError as exc:
+                raise ValueError("invalid chunk size") from exc
+            if chunk_size < 0 or total_size + chunk_size > MAX_JSON_REQUEST_BYTES:
+                raise ValueError("request body too large")
+            if chunk_size == 0:
+                # Consume optional trailer headers, ending at the empty line.
+                while True:
+                    trailer = self.rfile.readline(MAX_CHUNK_HEADER_BYTES + 1)
+                    if not trailer or len(trailer) > MAX_CHUNK_HEADER_BYTES:
+                        raise ValueError("invalid chunk trailer")
+                    if trailer == b"\r\n":
+                        return b"".join(chunks)
+            chunk = self.rfile.read(chunk_size)
+            if len(chunk) != chunk_size or self.rfile.read(2) != b"\r\n":
+                raise ValueError("incomplete chunked body")
+            chunks.append(chunk)
+            total_size += chunk_size
 
     def _send_preview(self, raw_name: str) -> None:
         name = unquote(raw_name)
