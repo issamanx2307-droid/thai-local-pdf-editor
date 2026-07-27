@@ -11,6 +11,7 @@ import argparse
 import base64
 import binascii
 import json
+import logging
 import sys
 import threading
 from http import HTTPStatus
@@ -55,6 +56,8 @@ ALLOWED_DEV_ORIGINS = {
     # Tauri v2 production WebView (Windows/Linux use https://tauri.localhost)
     "https://tauri.localhost",
 }
+
+LOGGER = logging.getLogger("thai_pdf_editor.react_bridge")
 
 
 class ReactBridgeServer(ThreadingHTTPServer):
@@ -153,7 +156,24 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
         """Keep test and dev output quiet unless the caller logs explicitly."""
 
     def _read_json(self) -> dict[str, Any] | None:
-        length_text = self.headers.get("Content-Length", "0")
+        length_text = self.headers.get("Content-Length", "")
+        LOGGER.info("_read_json path=%s Content-Length=%r Origin=%r", self.path, length_text, self.headers.get("Origin"))
+        if not length_text:
+            # Tauri WebView may omit Content-Length for small bodies; fall back
+            # to reading until EOF on the rfile by using a generous upper bound.
+            LOGGER.warning("No Content-Length header — reading up to 10MB")
+            try:
+                raw_body = self.rfile.read(10 * 1024 * 1024)
+                LOGGER.info("Read %d bytes without Content-Length", len(raw_body))
+                body = json.loads(raw_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                LOGGER.error("JSON parse failed (no Content-Length): %s", exc)
+                self._send_error(HTTPStatus.BAD_REQUEST, "invalid json body")
+                return None
+            if not isinstance(body, dict):
+                self._send_error(HTTPStatus.BAD_REQUEST, "json body must be an object")
+                return None
+            return body
         try:
             length = int(length_text)
         except ValueError:

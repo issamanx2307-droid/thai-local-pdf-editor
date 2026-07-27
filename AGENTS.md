@@ -123,4 +123,26 @@ npm run tauri:build                    REM 2. ถึงจะ build ตัว Ta
 
 ---
 
-_อัปเดตล่าสุด: 2026-07-25 — Tauri app กลายเป็นตัวหลักที่ใช้งานจริง, Tkinter exe เลิกใช้แล้ว, ProgID เก่าถูกลบออกจาก registry
+## 10) บั๊ก local_bridge.py — Content-Length fallback (แก้แล้ว 2026-07-27)
+
+**อาการ**: กดเปิดไฟล์ PDF ใน Tauri app เลือกไฟล์ได้ แต่ไฟล์ไม่เปิด ไม่มี error ชัดเจนใน log (bridge ไม่รับ request เลยด้วยซ้ำจากมุมมอง log)
+
+**สาเหตุ**: `_read_json()` ใน `local_bridge.py` เดิมใช้ `headers.get("Content-Length", "0")` — ถ้า Tauri WebView (Chromium-based) ไม่ส่ง `Content-Length` header มาด้วย จะอ่าน body ได้ 0 bytes → `json.loads(b"")` ล้มเหลว → bridge return error → UI แสดงผลล้มเหลวหรือค้าง
+
+**วิธีแก้**: เปลี่ยน fallback ให้ detect ว่าไม่มี header แล้ว read จนหมด:
+```python
+# เดิม (มีปัญหา):
+length_text = self.headers.get("Content-Length", "0")
+
+# ใหม่ (แก้แล้ว):
+length_text = self.headers.get("Content-Length", "")
+if not length_text:
+    raw_body = self.rfile.read(10 * 1024 * 1024)  # fallback อ่านจนหมด
+    ...
+```
+
+**สิ่งที่ต้อง rebuild หลังแก้**: sidecar → Tauri app ตามลำดับในข้อ 9 เสมอ แก้ `local_bridge.py` อย่างเดียวโดยไม่ rebuild = ใช้โค้ดเก่าใน exe ที่ freeze ไว้
+
+---
+
+_อัปเดตล่าสุด: 2026-07-27 — แก้ bug Content-Length fallback ใน local_bridge.py ที่ทำให้เปิดไฟล์ PDF ไม่ได้ใน Tauri WebView
