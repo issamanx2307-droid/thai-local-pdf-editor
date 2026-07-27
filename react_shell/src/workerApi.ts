@@ -157,12 +157,19 @@ export function previewUrlFrom(response: WorkerResponse | undefined): string | n
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${BRIDGE_BASE_URL}${path}`, init)
-  const payload = (await response.json()) as T
-  if (!response.ok) {
-    throw new Error(errorMessage(payload) || `bridge request failed: ${response.status}`)
+  try {
+    const response = await fetch(`${BRIDGE_BASE_URL}${path}`, init)
+    const payload = (await response.json()) as T
+    if (!response.ok) {
+      throw new Error(errorMessage(payload) || `bridge request failed: ${response.status}`)
+    }
+    return payload
+  } catch (error) {
+    if (error instanceof TypeError || (error instanceof Error && error.message.toLowerCase().includes('fetch'))) {
+      throw new Error('ไม่สามารถเชื่อมต่อบริการประมวลผล PDF ได้ กรุณาลองใหม่อีกครั้ง')
+    }
+    throw error
   }
-  return payload
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {

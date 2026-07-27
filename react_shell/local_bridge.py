@@ -14,6 +14,7 @@ import json
 import logging
 import sys
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -62,6 +63,8 @@ LOGGER = logging.getLogger("thai_pdf_editor.react_bridge")
 
 class ReactBridgeServer(ThreadingHTTPServer):
     """Threaded localhost server that owns one PDF worker session."""
+
+    allow_reuse_address = True
 
     def __init__(
         self,
@@ -253,11 +256,21 @@ def create_bridge_server(
     if host not in {DEFAULT_HOST, "localhost"}:
         raise ValueError("React bridge must bind to 127.0.0.1 or localhost")
     resolved_host = DEFAULT_HOST if host == "localhost" else host
-    return ReactBridgeServer(
-        (resolved_host, port),
-        ReactBridgeHandler,
-        preview_dir=preview_dir or TEMP_DIR / "react_bridge_previews",
-    )
+    ReactBridgeServer.allow_reuse_address = True
+    last_error: Exception | None = None
+    for attempt in range(10):
+        try:
+            return ReactBridgeServer(
+                (resolved_host, port),
+                ReactBridgeHandler,
+                preview_dir=preview_dir or TEMP_DIR / "react_bridge_previews",
+            )
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.3)
+    if last_error is not None:
+        raise last_error
+    raise OSError("could not bind to port")
 
 
 def run_bridge(*, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, preview_dir: Path | None = None) -> None:
