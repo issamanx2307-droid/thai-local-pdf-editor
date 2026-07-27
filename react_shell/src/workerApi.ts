@@ -97,13 +97,22 @@ export type UploadedPdfResponse = {
   page_count: number
 }
 
-export async function getBridgeHealth(): Promise<{
+export async function getBridgeHealth(retries = 10, delayMs = 300): Promise<{
   ok: boolean
   bridge: string
   state: WorkerState
   default_downloads_dir?: string
 }> {
-  return fetchJson('/api/health')
+  let lastError: unknown
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fetchJson('/api/health')
+    } catch (err) {
+      lastError = err
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+  }
+  throw lastError || new Error('ไม่สามารถเชื่อมต่อบริการประมวลผล PDF ได้')
 }
 
 export async function callWorker(request: WorkerRequest): Promise<WorkerResponse> {
