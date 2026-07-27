@@ -84,11 +84,6 @@ export type WorkerResponse = {
   }
 }
 
-export type DemoPathResponse = {
-  ok: boolean
-  path: string
-}
-
 export type UploadedImageResponse = {
   ok: boolean
   path: string
@@ -109,14 +104,6 @@ export async function getBridgeHealth(): Promise<{
   default_downloads_dir?: string
 }> {
   return fetchJson('/api/health')
-}
-
-export async function getDemoPath(): Promise<string> {
-  const response = await fetchJson<DemoPathResponse>('/api/demo')
-  if (!response.ok || !response.path) {
-    throw new Error('ไม่พบไฟล์ตัวอย่างจาก bridge')
-  }
-  return response.path
 }
 
 export async function callWorker(request: WorkerRequest): Promise<WorkerResponse> {
@@ -155,17 +142,6 @@ export async function uploadLocalPdf(file: File): Promise<UploadedPdfResponse> {
     throw new Error('อัปโหลด PDF เข้า local bridge ไม่สำเร็จ')
   }
   return response
-}
-
-export async function openDemoDocument(): Promise<WorkerResponse> {
-  const path = await getDemoPath()
-  return callWorker({
-    command: 'batch',
-    commands: [
-      { command: 'open_pdf', payload: { path } },
-      { command: 'render_page', payload: { page_index: 0, zoom: 1 } },
-    ],
-  })
 }
 
 export function lastRenderResponse(response: WorkerResponse): WorkerResponse | undefined {

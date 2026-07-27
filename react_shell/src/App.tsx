@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import {
   ArrowDown,
   ArrowLeft,
@@ -30,7 +31,6 @@ import {
   callWorker,
   getBridgeHealth,
   lastRenderResponse,
-  openDemoDocument,
   previewUrlFrom,
   uploadLocalImage,
   uploadLocalPdf,
@@ -79,7 +79,6 @@ const commandNames: WorkerCommandName[] = [
   'undo_pending',
   'redo_pending',
 ]
-const demoCommandNames = new Set<WorkerCommandName>(['open_pdf', 'render_page'])
 type BridgeStatus = 'idle' | 'connecting' | 'ready' | 'error'
 type PreviewImageSize = {
   width: number
@@ -189,8 +188,8 @@ function App() {
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>('idle')
-  const [statusMessage, setStatusMessage] = useState('กดเปิดไฟล์เพื่อโหลด PDF ตัวอย่างผ่าน worker')
-  const [lastCommand, setLastCommand] = useState<WorkerCommandName | 'demo' | null>(null)
+  const [statusMessage, setStatusMessage] = useState('พร้อมใช้งาน — กรุณากดเปิดไฟล์ PDF')
+  const [lastCommand, setLastCommand] = useState<WorkerCommandName | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<WorkerSearchResult[]>([])
@@ -339,33 +338,68 @@ function App() {
     }
   }, [])
 
-  const loadDemo = useCallback(async () => {
-    if (!(await confirmDiscardDirty())) {
-      return
-    }
+  const openPdfByPath = useCallback(
+    async (filePath: string) => {
+      if (!filePath) {
+        return
+      }
+      if (!(await confirmDiscardDirty())) {
+        return
+      }
 
-    setIsBusy(true)
-    setLastCommand('demo')
-    setBridgeStatus('connecting')
-    setStatusMessage('กำลังเปิด PDF ตัวอย่างผ่าน worker...')
-    try {
-      await getBridgeHealth()
-      const response = await openDemoDocument()
-      applyResponse(response)
-      setSearchResults([])
-      setActiveSearchIndex(-1)
-      setMetadataFields(emptyMetadata)
-      setFormFields([])
-      setBridgeStatus('ready')
-      setStatusMessage('เชื่อมต่อ Python worker แล้ว')
-    } catch (error) {
-      setBridgeStatus('error')
-      setStatusMessage(error instanceof Error ? error.message : 'เชื่อมต่อ bridge ไม่สำเร็จ')
-      setPreviewUrl(null)
-    } finally {
-      setIsBusy(false)
+      setIsBusy(true)
+      setLastCommand('open_pdf')
+      setBridgeStatus('connecting')
+      const fileName = filePath.split(/[\\/]/).pop() || filePath
+      setStatusMessage(`กำลังเปิด PDF: ${fileName}`)
+      try {
+        await getBridgeHealth()
+        const response = await callWorker({
+          command: 'batch',
+          commands: [
+            { command: 'open_pdf', payload: { path: filePath } },
+            { command: 'render_page', payload: { page_index: 0, zoom: defaultZoomPercent / 100 } },
+          ],
+        })
+        applyResponse(response)
+        setSearchQuery('')
+        setSearchResults([])
+        setActiveSearchIndex(-1)
+        setSelectedImagePath(null)
+        setSelectedImageName('')
+        setMetadataFields(emptyMetadata)
+        setFormFields([])
+        setBridgeStatus('ready')
+        setStatusMessage(`เปิดไฟล์แล้ว: ${fileName}`)
+      } catch (error) {
+        setBridgeStatus('error')
+        setStatusMessage(error instanceof Error ? error.message : 'เปิดไฟล์ PDF ไม่สำเร็จ')
+        setPreviewUrl(null)
+      } finally {
+        setIsBusy(false)
+      }
+    },
+    [applyResponse, confirmDiscardDirty],
+  )
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    listen<string>('open-pdf', (event) => {
+      if (event.payload) {
+        void openPdfByPath(event.payload)
+      }
+    })
+      .then((fn) => {
+        unlisten = fn
+      })
+      .catch(() => {
+        // Not in Tauri webview
+      })
+
+    return () => {
+      unlisten?.()
     }
-  }, [applyResponse, confirmDiscardDirty])
+  }, [openPdfByPath])
 
   const openPdfFile = useCallback(
     async (file: File | undefined) => {
@@ -1441,7 +1475,7 @@ function App() {
     () =>
       commandNames.map((name) => ({
         name,
-        state: lastCommand === name || (lastCommand === 'demo' && demoCommandNames.has(name)) ? 'active' : 'ready',
+        state: lastCommand === name ? 'active' : 'ready',
       })),
     [lastCommand],
   )
@@ -1462,7 +1496,6 @@ function App() {
         onFitWidth={() => void fitPageToViewer('width')}
         onCloseDocument={() => void closeDocument()}
         onNextPage={() => void renderPage(Math.min(totalPages - 1, selectedPageIndex + 1))}
-        onOpenDemo={loadDemo}
         onOpenPdf={() => openPdfInputRef.current?.click()}
         onPreviousPage={() => void renderPage(Math.max(0, selectedPageIndex - 1))}
         onPrint={openPrintDialog}
@@ -1627,7 +1660,6 @@ function Toolbar({
   onFitWidth,
   onCloseDocument,
   onNextPage,
-  onOpenDemo,
   onOpenPdf,
   onPreviousPage,
   onPrint,
@@ -1654,7 +1686,6 @@ function Toolbar({
   onFitWidth: () => void
   onCloseDocument: () => void
   onNextPage: () => void
-  onOpenDemo: () => void
   onOpenPdf: () => void
   onPreviousPage: () => void
   onPrint: () => void
@@ -1672,7 +1703,6 @@ function Toolbar({
     <header className="toolbar" aria-label="แถบเครื่องมือแก้ไข PDF">
       <ToolbarGroup label="ไฟล์">
         <ToolButton icon={<FolderOpen />} label="เปิดไฟล์" active disabled={isBusy} onClick={onOpenPdf} />
-        <ToolButton icon={<FileText />} label="ตัวอย่าง" disabled={isBusy} onClick={onOpenDemo} />
         <ToolButton icon={<X />} label="ล้างจอ" disabled={isBusy || !hasDocument} onClick={onCloseDocument} />
         <ToolButton icon={<Save />} label="บันทึก" disabled={isBusy || !hasDocument} onClick={onSaveCopy} />
         <ToolButton icon={<Printer />} label="พิมพ์" disabled={isBusy || !hasDocument} onClick={onPrint} />
@@ -2116,7 +2146,7 @@ function Viewer({
           {previewUrl ? (
             <img className="pdf-preview-image" src={previewUrl} alt={`ตัวอย่าง PDF หน้า ${selectedPage}`} />
           ) : (
-            <FallbackPage selectedPage={selectedPage} />
+            <FallbackPage />
           )}
         </div>
         <div className={`viewer-toast is-${bridgeStatus}`} aria-live="polite">
@@ -2153,23 +2183,18 @@ function Viewer({
   )
 }
 
-function FallbackPage({ selectedPage }: { selectedPage: number }) {
+function FallbackPage() {
   return (
     <>
       <div className="slide-visual" aria-hidden="true">
-        <div className="solar-card large">
-          <div className="sun"></div>
-          <div className="panel-grid"></div>
-        </div>
-        <div className="solar-card small">
-          <div className="panel-grid compact"></div>
-          <span>Load</span>
+        <div className="solar-card large" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <FolderOpen style={{ width: 64, height: 64, color: 'var(--accent-color, #3b82f6)' }} />
         </div>
       </div>
-      <h1>หน้า {selectedPage}: ขั้นตอนการทำงาน</h1>
+      <h1>โปรแกรมแก้ไข PDF ภาษาไทย</h1>
       <p>
-        เมื่อมีแสงอาทิตย์ตกกระทบ แสงอาทิตย์จะถ่ายเทพลังงานให้กับอิเล็กตรอนและโฮล
-        ทำให้เกิดการเคลื่อนไหว และเกิดกระแสไฟฟ้าจากแผงโซล่าเซลล์
+        กรุณากดปุ่ม "เปิดไฟล์" บนแถบเครื่องมือ เพื่อเลือกเอกสาร PDF ที่ต้องการดูหรือแก้ไข
+        หรือดับเบิลคลิกไฟล์ .pdf ในเครื่องคอมพิวเตอร์เพื่อเปิดใช้งานทันที
       </p>
     </>
   )

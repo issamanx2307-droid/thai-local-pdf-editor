@@ -109,10 +109,6 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if parsed.path == "/api/demo":
-            self._send_json({"ok": True, "path": str(_demo_pdf_path())})
-            return
-
         if parsed.path.startswith("/api/previews/"):
             self._send_preview(parsed.path.removeprefix("/api/previews/"))
             return
@@ -290,22 +286,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _demo_pdf_path() -> Path:
-    path = TEMP_DIR / "react_bridge_demo" / "react-worker-demo.pdf"
-    if path.exists():
-        return path
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    document = fitz.open()
-    for page_number in range(1, 4):
-        page = document.new_page(width=595, height=842)
-        page.insert_text((72, 96), f"React worker demo page {page_number}", fontsize=24)
-        page.insert_text((72, 142), "Rendered locally by the Python PDF worker.", fontsize=14)
-    document.save(str(path))
-    document.close()
-    return path
-
-
 def _save_uploaded_image(request: dict[str, Any]) -> dict[str, Any]:
     file_name = str(request.get("file_name") or "uploaded-image").strip()
     data_url = str(request.get("data_url") or "")
@@ -408,17 +388,6 @@ def _with_preview_urls(response: dict[str, Any], preview_dir: Path) -> dict[str,
             "preview_url": f"/api/previews/{preview_path.name}",
         }
     return converted
-
-
-def demo_open_request() -> dict[str, Any]:
-    """Return a batch request that opens and renders the local demo PDF."""
-    return {
-        "command": COMMAND_BATCH,
-        "commands": [
-            {"command": COMMAND_OPEN_PDF, "payload": {"path": str(_demo_pdf_path())}},
-            {"command": COMMAND_RENDER_PAGE, "payload": {"page_index": 0, "zoom": 1.0}},
-        ],
-    }
 
 
 if __name__ == "__main__":
