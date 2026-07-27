@@ -273,12 +273,19 @@ def create_bridge_server(
     raise OSError("could not bind to port")
 
 
+def _safe_print(msg: str) -> None:
+    try:
+        print(msg, flush=True)
+    except Exception:
+        pass
+
+
 def run_bridge(*, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, preview_dir: Path | None = None) -> None:
     """Run the local bridge until interrupted."""
     setup_logging()
     server = create_bridge_server(host=host, port=port, preview_dir=preview_dir)
     try:
-        print(f"{BRIDGE_NAME} listening on http://{host}:{port}", flush=True)
+        _safe_print(f"{BRIDGE_NAME} listening on http://{host}:{port}")
         server.serve_forever()
     finally:
         server.server_close()

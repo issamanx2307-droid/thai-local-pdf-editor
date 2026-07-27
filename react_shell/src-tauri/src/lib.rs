@@ -42,11 +42,13 @@ pub fn run() {
         .setup(move |app| {
             use tauri_plugin_shell::ShellExt;
 
-            // The sidecar is built from the existing Python/PyMuPDF core.  It binds
-            // only to 127.0.0.1, so the React UI stays a local desktop application.
-            let (_rx, bridge_child) = app.shell().sidecar("pdf-bridge")?.spawn()?;
+            let (mut rx, bridge_child) = app.shell().sidecar("pdf-bridge")?.spawn()?;
             app.manage(BridgeSidecar(Mutex::new(Some(bridge_child))));
             app.manage(InitialPdfPath(Mutex::new(pdf_arg.clone())));
+
+            tauri::async_runtime::spawn(async move {
+                while let Some(_event) = rx.recv().await {}
+            });
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(
