@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import { listen } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 import {
   ArrowDown,
   ArrowLeft,
@@ -42,7 +43,7 @@ import {
 } from './workerApi'
 import './App.css'
 
-const fallbackPages = Array.from({ length: 3 }, (_, index) => index + 1)
+const fallbackPages: number[] = []
 const defaultZoomPercent = 100
 const minZoomPercent = 50
 const maxZoomPercent = 240
@@ -248,23 +249,6 @@ function App() {
     return () => window.removeEventListener('beforeunload', warnBeforeUnload)
   }, [dirty])
 
-  useEffect(() => {
-    let cancelled = false
-    getBridgeHealth()
-      .then((health) => {
-        if (!cancelled && health.default_downloads_dir) {
-          setJpgOutputDir((current) => (current ? current : health.default_downloads_dir ?? current))
-        }
-      })
-      .catch(() => {
-        // Bridge not reachable yet; the JPG export field just stays empty
-        // and the Python worker falls back to its own default directory.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
   const confirmDiscardDirty = useCallback(() => {
     if (!dirty) {
       return Promise.resolve(true)
@@ -338,6 +322,26 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    getBridgeHealth()
+      .then((health) => {
+        if (!cancelled && health.default_downloads_dir) {
+          setJpgOutputDir((current) => (current ? current : health.default_downloads_dir ?? current))
+        }
+        if (!cancelled && health.state && health.state.has_document && health.state.current_file_path) {
+          applyResponse({ ok: true, command: 'open_pdf', state: health.state, payload: {} })
+        }
+      })
+      .catch(() => {
+        // Bridge not reachable yet; the JPG export field just stays empty
+        // and the Python worker falls back to its own default directory.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [applyResponse])
+
   const openPdfByPath = useCallback(
     async (filePath: string) => {
       if (!filePath) {
@@ -383,6 +387,18 @@ function App() {
   )
 
   useEffect(() => {
+    // 1. Check if Tauri launched with a file path argument (Explorer double-click)
+    invoke<string | null>('get_initial_pdf_path')
+      .then((path) => {
+        if (path) {
+          void openPdfByPath(path)
+        }
+      })
+      .catch(() => {
+        // Not running inside Tauri
+      })
+
+    // 2. Listen for 'open-pdf' events emitted dynamically
     let unlisten: (() => void) | undefined
     listen<string>('open-pdf', (event) => {
       if (event.payload) {

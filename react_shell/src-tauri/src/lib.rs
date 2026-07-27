@@ -9,6 +9,7 @@ use tauri_plugin_shell::process::CommandChild;
 /// a PyInstaller onefile build, its unpacked child process too) is left
 /// running in the background after the window closes.
 struct BridgeSidecar(Mutex<Option<CommandChild>>);
+struct InitialPdfPath(Mutex<Option<String>>);
 
 /// Detect whether the app was launched by Windows file association (e.g. double-clicking
 /// a .pdf file in Explorer).  When that happens Windows passes the file path as the
@@ -25,6 +26,11 @@ fn get_pdf_arg() -> Option<String> {
     None
 }
 
+#[tauri::command]
+fn get_initial_pdf_path(state: tauri::State<'_, InitialPdfPath>) -> Option<String> {
+    state.0.lock().unwrap().clone()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Capture the PDF path before the builder consumes the environment.
@@ -32,6 +38,7 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![get_initial_pdf_path])
         .setup(move |app| {
             use tauri_plugin_shell::ShellExt;
 
@@ -39,6 +46,7 @@ pub fn run() {
             // only to 127.0.0.1, so the React UI stays a local desktop application.
             let (_rx, bridge_child) = app.shell().sidecar("pdf-bridge")?.spawn()?;
             app.manage(BridgeSidecar(Mutex::new(Some(bridge_child))));
+            app.manage(InitialPdfPath(Mutex::new(pdf_arg.clone())));
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(
