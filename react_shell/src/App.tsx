@@ -219,8 +219,8 @@ function App() {
   const [metadataFields, setMetadataFields] = useState<MetadataFields>(emptyMetadata)
   const [formFields, setFormFields] = useState<WorkerFormField[]>([])
   const [jpgPageScope, setJpgPageScope] = useState<PageScope>('current')
-  const [jpgDpi, setJpgDpi] = useState('150')
-  const [jpgQuality, setJpgQuality] = useState('95')
+  const [jpgDpi, setJpgDpi] = useState('300')
+  const [jpgQuality, setJpgQuality] = useState('100')
   const [jpgOutputDir, setJpgOutputDir] = useState('')
   const [batchJpgFileNames, setBatchJpgFileNames] = useState<string[]>([])
   const [activeToolTab, setActiveToolTab] = useState<ToolTab>('edit')
@@ -1578,8 +1578,8 @@ function App() {
         payload: {
           selected_page_index: selectedPageIndex,
           page_scope: jpgPageScope,
-          dpi: Number.isFinite(dpi) ? dpi : 150,
-          quality: Number.isFinite(quality) ? quality : 95,
+          dpi: Number.isFinite(dpi) ? dpi : 300,
+          quality: Number.isFinite(quality) ? quality : 100,
           destination_dir: jpgOutputDir.trim(),
         },
       })
@@ -1621,8 +1621,8 @@ function App() {
           command: 'batch_export_jpg',
           payload: {
             source_paths: uploadedPdfs.map((item) => item.path),
-            dpi: Number.isFinite(dpi) ? dpi : 150,
-            quality: Number.isFinite(quality) ? quality : 95,
+            dpi: Number.isFinite(dpi) ? dpi : 300,
+            quality: Number.isFinite(quality) ? quality : 100,
             destination_dir: jpgOutputDir.trim(),
           },
         })

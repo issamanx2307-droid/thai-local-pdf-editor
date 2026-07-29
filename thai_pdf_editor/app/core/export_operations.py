@@ -20,8 +20,8 @@ from thai_pdf_editor.app.utils.validation import require_pdf_path
 
 LOGGER = logging.getLogger("thai_pdf_editor.export_operations")
 
-DEFAULT_JPG_DPI = 150
-DEFAULT_JPG_QUALITY = 95
+DEFAULT_JPG_DPI = 300
+DEFAULT_JPG_QUALITY = 100
 MIN_JPG_DPI = 72
 MAX_JPG_DPI = 600
 MIN_JPG_QUALITY = 1
