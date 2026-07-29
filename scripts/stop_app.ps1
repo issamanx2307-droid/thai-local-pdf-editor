@@ -45,7 +45,12 @@ if ($matches.Count -eq 0) {
 }
 
 foreach ($processId in $matches) {
-    Stop-Process -Id $processId -Force
+    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    if (-not $process) {
+        continue
+    }
+
+    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
     Add-Content -LiteralPath $logPath -Value ((Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " stop pid=" + $processId)
     Write-Host ("Stopped Thai PDF Editor. PID=" + $processId)
 }

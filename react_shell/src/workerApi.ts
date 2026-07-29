@@ -97,6 +97,39 @@ export type UploadedPdfResponse = {
   page_count: number
 }
 
+export type ConverterOutputFormat = 'docx' | 'xlsx' | 'pdf' | 'jpg'
+
+export type ConverterJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+export type ConverterJobOptions = {
+  output_format: ConverterOutputFormat
+  start_page: number
+  end_page: number | null
+  workers: number
+  dpi: number
+  lang: string
+  use_cache: boolean
+  use_preprocessing: boolean
+}
+
+export type ConverterJob = {
+  id: string
+  status: ConverterJobStatus
+  source_filename: string
+  pdf_type: string | null
+  done_pages: number
+  total_pages: number
+  progress_percent: number
+  failed_pages: number[]
+  error: string | null
+  options: Partial<ConverterJobOptions>
+  created_at: string
+  updated_at: string
+  started_at: string | null
+  finished_at: string | null
+  download_url: string | null
+}
+
 export async function getBridgeHealth(retries = 10, delayMs = 300): Promise<{
   ok: boolean
   bridge: string
@@ -153,6 +186,52 @@ export async function uploadLocalPdf(file: File): Promise<UploadedPdfResponse> {
   return response
 }
 
+export async function startConverterJob(
+  sourcePath: string,
+  options: Partial<ConverterJobOptions>,
+): Promise<ConverterJob> {
+  return fetchJson<ConverterJob>('/api/converter/jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_path: sourcePath, options }),
+  })
+}
+
+export async function getConverterJob(jobId: string): Promise<ConverterJob> {
+  return fetchJson<ConverterJob>(`/api/converter/jobs/${encodeURIComponent(jobId)}`)
+}
+
+export async function cancelConverterJob(jobId: string): Promise<void> {
+  await fetchJson(`/api/converter/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' })
+}
+
+export async function retryConverterJob(jobId: string): Promise<ConverterJob> {
+  return fetchJson<ConverterJob>(`/api/converter/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' })
+}
+
+export function converterDownloadUrl(job: ConverterJob): string | null {
+  return job.download_url ? `${BRIDGE_BASE_URL}${job.download_url}` : null
+}
+
+export async function downloadConverterResult(job: ConverterJob): Promise<Blob> {
+  const url = converterDownloadUrl(job)
+  if (!url) {
+    throw new Error('ยังไม่มีไฟล์ผลลัพธ์ให้ดาวน์โหลด')
+  }
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`ดาวน์โหลดไฟล์ไม่สำเร็จ: ${response.status}`)
+  }
+  return response.blob()
+}
+
+export function converterResultFileName(job: ConverterJob): string {
+  const format = job.options.output_format || 'docx'
+  const stem = job.source_filename.replace(/\.[^./\\]+$/, '') || 'converted'
+  const extension = format === 'jpg' ? 'zip' : format
+  return `${stem}.${extension}`
+}
+
 export function lastRenderResponse(response: WorkerResponse): WorkerResponse | undefined {
   if (response.command === 'render_page') {
     return response
@@ -175,7 +254,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     return payload
   } catch (error) {
     if (error instanceof TypeError || (error instanceof Error && error.message.toLowerCase().includes('fetch'))) {
-      throw new Error('ไม่สามารถเชื่อมต่อบริการประมวลผล PDF ได้ กรุณาลองใหม่อีกครั้ง')
+      throw new Error('ไม่สามารถเชื่อมต่อบริการประมวลผล PDF ได้ กรุณาลองใหม่อีกครั้ง', { cause: error })
     }
     throw error
   }

@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  Ban,
   Crop,
   FileDown,
   FileText,
@@ -17,6 +18,7 @@ import {
   MousePointer2,
   Printer,
   Redo2,
+  RefreshCw,
   RotateCcw,
   RotateCw,
   Save,
@@ -24,17 +26,26 @@ import {
   Square,
   Type,
   Undo2,
+  Wand2,
   X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
 import {
   callWorker,
+  cancelConverterJob,
+  converterResultFileName,
+  downloadConverterResult,
   getBridgeHealth,
+  getConverterJob,
   lastRenderResponse,
   previewUrlFrom,
+  retryConverterJob,
+  startConverterJob,
   uploadLocalImage,
   uploadLocalPdf,
+  type ConverterJob,
+  type ConverterOutputFormat,
   type WorkerCommandName,
   type WorkerFormField,
   type WorkerResponse,
@@ -218,6 +229,13 @@ function App() {
   const [printers, setPrinters] = useState<string[]>([])
   const [selectedPrinter, setSelectedPrinter] = useState('')
   const [printCopies, setPrintCopies] = useState('1')
+  const [isConvertDialogOpen, setIsConvertDialogOpen] = useState(false)
+  const [convertFormat, setConvertFormat] = useState<ConverterOutputFormat>('docx')
+  const [convertPageScope, setConvertPageScope] = useState<PageScope>('all')
+  const [convertJob, setConvertJob] = useState<ConverterJob | null>(null)
+  const [convertError, setConvertError] = useState<string | null>(null)
+  const [isConvertStarting, setIsConvertStarting] = useState(false)
+  const convertPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [previewImageSize, setPreviewImageSize] = useState<PreviewImageSize | null>(null)
   const [isViewerExpanded, setIsViewerExpanded] = useState(false)
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false)
@@ -1175,6 +1193,149 @@ function App() {
     }
   }, [printCopies, selectedPrinter])
 
+  const clearConvertPoll = useCallback(() => {
+    if (convertPollRef.current !== null) {
+      clearInterval(convertPollRef.current)
+      convertPollRef.current = null
+    }
+  }, [])
+
+  useEffect(() => clearConvertPoll, [clearConvertPoll])
+
+  const pollConvertJob = useCallback(
+    (jobId: string) => {
+      clearConvertPoll()
+      const refreshJob = async () => {
+        try {
+          const job = await getConverterJob(jobId)
+          setConvertJob(job)
+          if (job.status === 'failed') {
+            setConvertError(job.error || 'แปลงไฟล์ไม่สำเร็จ')
+            clearConvertPoll()
+          } else if (job.status === 'cancelled') {
+            clearConvertPoll()
+          } else if (job.status === 'succeeded') {
+            clearConvertPoll()
+          }
+        } catch (error) {
+          setConvertError(error instanceof Error ? error.message : 'ตรวจสถานะงานแปลงไม่สำเร็จ')
+          clearConvertPoll()
+        }
+      }
+      convertPollRef.current = setInterval(() => void refreshJob(), 1200)
+      void refreshJob()
+    },
+    [clearConvertPoll],
+  )
+
+  const openConvertDialog = useCallback(() => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนแปลงเป็น Word/OCR')
+      return
+    }
+    clearConvertPoll()
+    setConvertJob(null)
+    setConvertError(null)
+    setConvertFormat('docx')
+    setConvertPageScope('all')
+    setIsConvertDialogOpen(true)
+    setStatusMessage('เลือกรูปแบบไฟล์ที่ต้องการแปลง')
+  }, [clearConvertPoll, hasDocument])
+
+  const closeConvertDialog = useCallback(() => {
+    clearConvertPoll()
+    setIsConvertDialogOpen(false)
+    setConvertJob(null)
+    setConvertError(null)
+    setStatusMessage('ปิดหน้าต่างแปลงไฟล์')
+  }, [clearConvertPoll])
+
+  const startConversion = useCallback(async () => {
+    if (!hasDocument) {
+      setStatusMessage('กรุณาเปิดไฟล์ PDF ก่อนแปลงเป็น Word/OCR')
+      return
+    }
+
+    setIsConvertStarting(true)
+    setConvertError(null)
+    setConvertJob(null)
+    setStatusMessage('กำลังเตรียมไฟล์ล่าสุดสำหรับแปลง...')
+    try {
+      // Staging save: convert must never read the live working copy directly,
+      // and unsaved in-memory edits (rotate, overlays, etc.) would otherwise
+      // be silently dropped. save_copy with no destination writes a fresh
+      // temp snapshot that reflects everything currently in memory.
+      const saveResponse = await callWorker({ command: 'save_copy' })
+      const stagedPath = saveResponse.payload.destination_path
+      if (typeof stagedPath !== 'string' || !stagedPath) {
+        throw new Error('เตรียมไฟล์สำหรับแปลงไม่สำเร็จ')
+      }
+
+      const job = await startConverterJob(stagedPath, {
+        output_format: convertFormat,
+        start_page: convertPageScope === 'current' ? selectedPageIndex : 0,
+        end_page: convertPageScope === 'current' ? selectedPageIndex + 1 : null,
+      })
+      setConvertJob(job)
+      setStatusMessage('เริ่มแปลงไฟล์แล้ว กำลังประมวลผล...')
+      pollConvertJob(job.id)
+    } catch (error) {
+      setConvertError(error instanceof Error ? error.message : 'เริ่มแปลงไฟล์ไม่สำเร็จ')
+    } finally {
+      setIsConvertStarting(false)
+    }
+  }, [convertFormat, convertPageScope, hasDocument, pollConvertJob, selectedPageIndex])
+
+  const cancelConversion = useCallback(async () => {
+    if (!convertJob) {
+      return
+    }
+    clearConvertPoll()
+    try {
+      await cancelConverterJob(convertJob.id)
+      const job = await getConverterJob(convertJob.id)
+      setConvertJob(job)
+      setStatusMessage('ยกเลิกงานแปลงไฟล์แล้ว')
+    } catch (error) {
+      setConvertError(error instanceof Error ? error.message : 'ยกเลิกงานแปลงไม่สำเร็จ')
+    }
+  }, [clearConvertPoll, convertJob])
+
+  const retryConversion = useCallback(async () => {
+    if (!convertJob) {
+      return
+    }
+    setConvertError(null)
+    try {
+      const job = await retryConverterJob(convertJob.id)
+      setConvertJob(job)
+      setStatusMessage('กำลังลองแปลงไฟล์ใหม่...')
+      pollConvertJob(job.id)
+    } catch (error) {
+      setConvertError(error instanceof Error ? error.message : 'ลองแปลงไฟล์ใหม่ไม่สำเร็จ')
+    }
+  }, [convertJob, pollConvertJob])
+
+  const downloadConvertedFile = useCallback(async () => {
+    if (!convertJob || convertJob.status !== 'succeeded') {
+      return
+    }
+    try {
+      const blob = await downloadConverterResult(convertJob)
+      const objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = converterResultFileName(convertJob)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(objectUrl)
+      setStatusMessage('ดาวน์โหลดไฟล์ที่แปลงแล้ว')
+    } catch (error) {
+      setConvertError(error instanceof Error ? error.message : 'ดาวน์โหลดไฟล์ไม่สำเร็จ')
+    }
+  }, [convertJob])
+
   const createSignatureImage = useCallback(async () => {
     const text = signatureText.trim()
     if (!text) {
@@ -1588,6 +1749,7 @@ function App() {
           onCropCurrentPage={() => void cropCurrentPage()}
           onDrawRectangleOverlay={() => void addShapeOverlay('draw_rectangle_overlay')}
           onExportJpg={() => void exportJpg()}
+          onOpenConvertDialog={openConvertDialog}
           onFormFieldValueChange={updateFormFieldValue}
           onCropMarginPercentChange={setCropMarginPercent}
           onImageOverlayWidthChange={setImageOverlayWidth}
@@ -1667,6 +1829,22 @@ function App() {
       ) : null}
       {isGuideOpen ? <GuideDialog onClose={closeGuide} /> : null}
       {isDiscardDialogOpen ? <DiscardChangesDialog onCancel={() => answerDiscardPrompt(false)} onConfirm={() => answerDiscardPrompt(true)} /> : null}
+      {isConvertDialogOpen ? (
+        <ConvertDialog
+          error={convertError}
+          format={convertFormat}
+          isStarting={isConvertStarting}
+          job={convertJob}
+          pageScope={convertPageScope}
+          onCancel={() => void cancelConversion()}
+          onClose={closeConvertDialog}
+          onDownload={() => void downloadConvertedFile()}
+          onFormatChange={setConvertFormat}
+          onPageScopeChange={setConvertPageScope}
+          onRetry={() => void retryConversion()}
+          onStart={() => void startConversion()}
+        />
+      ) : null}
     </main>
   )
 }
@@ -1853,6 +2031,179 @@ function PrintDialog({
               พิมพ์
             </button>
           </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function ConvertDialog({
+  error,
+  format,
+  isStarting,
+  job,
+  pageScope,
+  onCancel,
+  onClose,
+  onDownload,
+  onFormatChange,
+  onPageScopeChange,
+  onRetry,
+  onStart,
+}: {
+  error: string | null
+  format: ConverterOutputFormat
+  isStarting: boolean
+  job: ConverterJob | null
+  pageScope: PageScope
+  onCancel: () => void
+  onClose: () => void
+  onDownload: () => void
+  onFormatChange: (value: ConverterOutputFormat) => void
+  onPageScopeChange: (value: PageScope) => void
+  onRetry: () => void
+  onStart: () => void
+}) {
+  const isRunning = job?.status === 'queued' || job?.status === 'running'
+  const isDone = job?.status === 'succeeded'
+  const isFailed = job?.status === 'failed'
+  const isCancelled = job?.status === 'cancelled'
+  const canCloseNow = !isRunning
+  const progressLabel = job ? `${Math.round(job.progress_percent)}%` : '0%'
+  const statusLabel =
+    job?.status === 'queued'
+      ? 'อยู่ในคิว...'
+      : job?.status === 'running'
+        ? `กำลังแปลง... (${job.done_pages}/${job.total_pages || '?'} หน้า)`
+        : isDone
+          ? 'แปลงไฟล์เสร็จแล้ว'
+          : isFailed
+            ? 'แปลงไฟล์ไม่สำเร็จ'
+            : isCancelled
+              ? 'ยกเลิกงานแปลงแล้ว'
+            : ''
+
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && canCloseNow) {
+          onClose()
+        }
+      }}
+      role="presentation"
+    >
+      <section aria-labelledby="convert-title" aria-modal="true" className="print-dialog convert-dialog" role="dialog">
+        <div className="guide-heading">
+          <div>
+            <b id="convert-title">แปลงเป็น Word/OCR</b>
+            <span>ประมวลผลในเครื่องนี้ทั้งหมด ไม่ส่งไฟล์ออกอินเทอร์เน็ต</span>
+          </div>
+          <button
+            aria-label="ปิดหน้าต่างแปลงไฟล์"
+            className="icon-action"
+            disabled={!canCloseNow}
+            onClick={onClose}
+            type="button"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="print-content">
+          {!job ? (
+            <>
+              <label className="print-field">
+                <span>รูปแบบไฟล์ผลลัพธ์</span>
+                <select
+                  disabled={isStarting}
+                  onChange={(event) => onFormatChange(event.currentTarget.value as ConverterOutputFormat)}
+                  value={format}
+                >
+                  <option value="docx">Word (.docx)</option>
+                  <option value="xlsx">Excel (.xlsx)</option>
+                  <option value="pdf">PDF ค้นหาได้ (.pdf)</option>
+                  <option value="jpg">รูปภาพ JPG (.zip)</option>
+                </select>
+              </label>
+              <label className="print-field">
+                <span>ขอบเขตหน้า</span>
+                <select
+                  disabled={isStarting}
+                  onChange={(event) => onPageScopeChange(event.currentTarget.value as PageScope)}
+                  value={pageScope}
+                >
+                  <option value="all">ทุกหน้าในไฟล์นี้</option>
+                  <option value="current">เฉพาะหน้านี้</option>
+                </select>
+              </label>
+              {error ? <p className="dialog-message convert-error">{error}</p> : null}
+              <div className="dialog-actions">
+                <button className="secondary-action" disabled={isStarting} onClick={onClose} type="button">
+                  ยกเลิก
+                </button>
+                <button className="primary-action" disabled={isStarting} onClick={onStart} type="button">
+                  {isStarting ? 'กำลังเตรียมไฟล์...' : 'เริ่มแปลง'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="dialog-message">{statusLabel}</p>
+              {isRunning || isDone ? (
+                <div className="convert-progress-track" role="progressbar" aria-valuenow={Math.round(job.progress_percent)} aria-valuemin={0} aria-valuemax={100}>
+                  <div className="convert-progress-fill" style={{ width: isDone ? '100%' : progressLabel }} />
+                </div>
+              ) : null}
+              {isFailed && job.error ? <p className="dialog-message convert-error">{job.error}</p> : null}
+              {error ? <p className="dialog-message convert-error">{error}</p> : null}
+              <div className="dialog-actions">
+                {isRunning ? (
+                  <>
+                    <button className="secondary-action" onClick={onCancel} type="button">
+                      <Ban size={15} />
+                      ยกเลิกงาน
+                    </button>
+                    <button className="primary-action" disabled type="button">
+                      {progressLabel}
+                    </button>
+                  </>
+                ) : null}
+                {isDone ? (
+                  <>
+                    <button className="secondary-action" onClick={onClose} type="button">
+                      ปิด
+                    </button>
+                    <button className="primary-action" onClick={onDownload} type="button">
+                      <FileDown size={15} />
+                      ดาวน์โหลดไฟล์
+                    </button>
+                  </>
+                ) : null}
+                {isFailed ? (
+                  <>
+                    <button className="secondary-action" onClick={onClose} type="button">
+                      ปิด
+                    </button>
+                    <button className="primary-action" onClick={onRetry} type="button">
+                      <RefreshCw size={15} />
+                      ลองใหม่
+                    </button>
+                  </>
+                ) : null}
+                {isCancelled ? (
+                  <>
+                    <button className="secondary-action" onClick={onClose} type="button">
+                      ปิด
+                    </button>
+                    <button className="primary-action" onClick={onRetry} type="button">
+                      <RefreshCw size={15} />
+                      ลองใหม่
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            </>
+          )}
         </div>
       </section>
     </div>
@@ -2256,6 +2607,7 @@ function ToolPanel({
   onCropMarginPercentChange,
   onDrawRectangleOverlay,
   onExportJpg,
+  onOpenConvertDialog,
   onFormFieldValueChange,
   onImageOverlayWidthChange,
   onJpgDpiChange,
@@ -2317,6 +2669,7 @@ function ToolPanel({
   onCropMarginPercentChange: (value: string) => void
   onDrawRectangleOverlay: () => void
   onExportJpg: () => void
+  onOpenConvertDialog: () => void
   onFormFieldValueChange: (xref: number, value: string | boolean) => void
   onImageOverlayWidthChange: (value: string) => void
   onJpgDpiChange: (value: string) => void
@@ -2745,6 +3098,17 @@ function ToolPanel({
           <p className="image-selection">{batchJpgLabel}</p>
           <button className="secondary-action" disabled={isBusy} onClick={onChooseBatchJpgFiles} type="button">
             เลือก PDF หลายไฟล์
+          </button>
+        </section>
+        <section className="tool-section">
+          <h2>
+            <Wand2 size={16} />
+            แปลงเป็น Word/OCR
+          </h2>
+          <p className="empty-tool-note">แปลง PDF เป็น Word, Excel, PDF ที่ค้นหาได้ หรือ JPG ด้วย OCR ภาษาไทย</p>
+          <button className="primary-action" disabled={isBusy || !hasDocument} onClick={onOpenConvertDialog} type="button">
+            <Wand2 size={16} />
+            แปลงเป็น Word/OCR
           </button>
         </section>
       </>

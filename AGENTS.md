@@ -176,3 +176,73 @@ if not length_text:
 ---
 
 _อัปเดตล่าสุด: 2026-07-27 — เปลี่ยน sidecar build เป็น --onedir ลด cold start จาก ~3.5s เหลือ ~1.3s
+
+---
+
+## 13) แผนที่อนุมัติ: รวม PDF → Word/OCR จาก `D:\pdf_doc` เข้าหน้าเดียวของ Editor
+
+> **สถานะ:** วางแผนแล้วตามคำขอผู้ใช้เมื่อ 2026-07-28 ยังไม่เริ่ม implement
+
+### เป้าหมาย UX
+
+- ผู้ใช้ใช้คำสั่งหลักทั้งหมดจากหน้าหลักของ Tauri app เดียว: เปิด/แก้/บันทึก/ส่งออก JPG และ `แปลงเป็น Word/OCR`
+- ไม่เปิดหน้าต่างหรือเว็บแอป `D:\pdf_doc` แยกต่างหาก และไม่ต้องให้ผู้ใช้ start backend เอง
+- การประมวลผลหนักทำงานเบื้องหลังพร้อมสถานะ, progress, ยกเลิก, ลองใหม่ และปุ่มเปิดผลลัพธ์/โฟลเดอร์
+- ยังคง local-only: bind เฉพาะ `127.0.0.1`, ไม่ส่งไฟล์หรือข้อความใน PDF ออกนอกเครื่อง
+
+### ขอบเขตที่เพิ่มเข้ามา
+
+- ข้อกำหนดเดิมที่ระบุว่า OCR/PDF-to-Word อยู่นอก scope **ถูกแทนที่เฉพาะสำหรับ integration นี้** ตามคำขอผู้ใช้
+- นำ conversion engine จาก `D:\pdf_doc` มาใช้ซ้ำ: PDF/Image → DOCX, XLSX, searchable PDF และ JPG
+- ไม่เพิ่ม cloud, account, external API หรือ AI service
+- OCR สำหรับ PDF สแกนต้องใช้ Tesseract และ language pack `tha`; ถ้าไม่พร้อมให้รายงาน Thai error ที่แก้ได้ ไม่ crash
+
+### สถาปัตยกรรมที่ต้องใช้
+
+```
+React/Tauri หน้าหลักเดียว
+  ├─ pdf-bridge.exe       : stateful PDF editing / preview (มีอยู่แล้ว, พอร์ต 5178)
+  └─ pdf-converter.exe    : conversion job service จาก pdf_doc (เพิ่มใหม่, localhost เท่านั้น)
+       └─ queue + SQLite + cache + Tesseract
+```
+
+- **ห้าม** ใส่ OCR ที่กินเวลานานลงใน `PdfWorkerSession.handle()` หรือ `/api/worker` เดิม เพราะ `session_lock` จะทำให้ editor ทั้งหน้าใช้งานไม่ได้จนงานจบ
+- ใช้ converter worker ที่เป็น async job แยก process เพื่อเก็บ progress/cancel/retry ของ `pdf_doc`
+- Tauri shell เป็นผู้ start/health-check/stop ทั้งสอง sidecar; converter ต้องถูกปิดพร้อมแอปและต้องไม่มี orphan process
+- เลือกพอร์ต converter จาก config ที่กำหนดชัด, ตรวจ collision, และห้าม hardcode URL ใน React โดยไม่มี health state
+- React ต้องไม่เรียก converter localhost ข้าม origin ตรง ๆ: ใช้ Tauri command หรือ route proxy ใน `local_bridge.py` ที่ตรวจ origin ด้วย allowlist เดิม เพื่อไม่สร้างช่อง CORS
+
+### กติกาไฟล์และ state สำคัญ
+
+- ปุ่มแปลงต้องแยกสองทางเลือกชัดเจน:
+  1. `แปลงไฟล์ต้นฉบับ` ใช้ source PDF ที่เปิดอยู่
+  2. `บันทึกสำเนาที่แก้ไขแล้วและแปลง` สร้าง staging PDF ด้วย safe Save As flow ก่อน แล้ว converter อ่าน staging file
+- ห้าม converter อ่าน `working_copy_path` หรือ pending operations โดยตรง เพราะ operation ที่ยังไม่ Save อาจยังไม่ได้ apply ลง PDF
+- ห้ามเขียนทับ source PDF; ทุก output, staging, upload copy, cache และ SQLite อยู่ใต้ data directory ของ per-user app และต้อง cleanup ได้
+- คง page limit, file-size limit, cancellation และ validation ของ converter; UI ต้องแสดงชื่อไฟล์ภาษาไทยได้ถูกต้อง
+
+### Dependency และ packaging
+
+- แยก dependency ของ converter ออกจาก editor bridge: `pytesseract`, `python-docx`, `openpyxl`, FastAPI/uvicorn (ถ้ายังใช้ HTTP service) และ dependency OCR ที่จำเป็น
+- version ของ PyMuPDF ต้อง pin และทดสอบร่วมกัน; ห้ามพึ่ง global Python ของเครื่องใน installed app
+- build `pdf-converter` เป็น PyInstaller `--onedir` เช่นเดียวกับ `pdf-bridge`; bundle โฟลเดอร์ `_internal` และ resource ที่ต้องใช้เข้ากับ NSIS installer
+- ตรวจ Tesseract executable และ `tha.traineddata` ตอนเปิดหน้าคำสั่ง/ก่อนเริ่ม job; support local tessdata directory ที่เขียนได้โดยผู้ใช้
+- อย่าใส่ compiled sidecar หรือ `_internal` ลง Git; build ใหม่จาก script ทุกครั้งก่อน `tauri:build`
+
+### ลำดับ implementation
+
+1. **Foundation:** package/import conversion engine ให้เป็น module ที่ไม่พึ่ง current working directory, pin dependencies, เพิ่ม health/system-check และ test contract
+2. **Service sidecar:** build converter sidecar, lifecycle ใน Rust, per-user data path, dynamic/configured port, health/recovery และ graceful shutdown
+3. **Bridge/API:** เพิ่ม origin-safe proxy หรือ Tauri IPC สำหรับ create/get/cancel/retry/download job โดยจำกัด request size และ path ที่อนุญาต
+4. **หน้าเดียว:** เพิ่ม command `แปลงเป็น Word/OCR`, panel งานแปลง, output format, page range, DPI, ภาษา, progress, cancel/retry/open result และ disabled states
+5. **ความปลอดภัยของเอกสาร:** ทำ staging-save สำหรับงาน dirty, ตรวจ hash ของต้นฉบับ, cleanup artifacts และข้อความ error ภาษาไทย
+6. **Packaging/QA:** build/install sidecars, fresh install, restart, file association, Tesseract-present/absent และ PDF ภาษาไทยทั้ง text/scanned
+
+### Acceptance gate เพิ่มเติม
+
+- Unit/API tests: job lifecycle, options bounds, Thai paths, file-size/page limits, cancellation/retry, origin allowlist และ no orphan process
+- Integration tests: original PDF hash ไม่เปลี่ยน, dirty document ใช้ staging output, DOCX/XLSX/searchable-PDF/JPG output เปิดได้, progress ไปถึง terminal state
+- GUI QA: เริ่มงาน/ยกเลิก/ลองใหม่/เปิดผลลัพธ์จากหน้าเดียว, เปิด PDF ขณะ OCR ทำงานได้, error Tesseract ไม่มีหรือไม่มีภาษาไทยอ่านเข้าใจได้
+- Packaging QA: fresh per-user install มีทั้ง sidecar, cold/warm start, ปิดแอปแล้ว process ของทั้งสอง sidecar หาย, ไม่มี dependency จาก global Python
+
+_อัปเดตแผนล่าสุด: 2026-07-28 — เพิ่ม integration PDF→Word/OCR แบบหน้าเดียวตามคำขอผู้ใช้_

@@ -35,9 +35,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/pdf-bridge"],
+    "externalBin": ["binaries/pdf-bridge", "binaries/pdf-converter"],
     "resources": {
-      "binaries/_internal": "_internal"
+      "binaries/_internal": "_internal",
+      "binaries/converter_internal": "converter_internal"
     },
     "fileAssociations": [
       {

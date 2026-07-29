@@ -9,6 +9,7 @@ use tauri_plugin_shell::process::CommandChild;
 /// a PyInstaller onefile build, its unpacked child process too) is left
 /// running in the background after the window closes.
 struct BridgeSidecar(Mutex<Option<CommandChild>>);
+struct ConverterSidecar(Mutex<Option<CommandChild>>);
 struct InitialPdfPath(Mutex<Option<String>>);
 
 /// Detect whether the app was launched by Windows file association (e.g. double-clicking
@@ -19,7 +20,11 @@ fn get_pdf_arg() -> Option<String> {
     // args[0] is the executable; args[1] (if present) should be the file path.
     if let Some(path) = args.get(1) {
         let p = std::path::Path::new(path);
-        if p.exists() && p.extension().map(|e| e.eq_ignore_ascii_case("pdf")).unwrap_or(false) {
+        if p.exists()
+            && p.extension()
+                .map(|e| e.eq_ignore_ascii_case("pdf"))
+                .unwrap_or(false)
+        {
             return Some(path.clone());
         }
     }
@@ -44,10 +49,18 @@ pub fn run() {
 
             let (mut rx, bridge_child) = app.shell().sidecar("pdf-bridge")?.spawn()?;
             app.manage(BridgeSidecar(Mutex::new(Some(bridge_child))));
+
+            // OCR and document conversion can run for minutes.  Keep it in a
+            // distinct local-only sidecar so the stateful editor bridge stays
+            // responsive while it owns an open PDF document.
+            let (mut converter_rx, converter_child) =
+                app.shell().sidecar("pdf-converter")?.spawn()?;
+            app.manage(ConverterSidecar(Mutex::new(Some(converter_child))));
             app.manage(InitialPdfPath(Mutex::new(pdf_arg.clone())));
 
+            tauri::async_runtime::spawn(async move { while let Some(_event) = rx.recv().await {} });
             tauri::async_runtime::spawn(async move {
-                while let Some(_event) = rx.recv().await {}
+                while let Some(_event) = converter_rx.recv().await {}
             });
 
             if cfg!(debug_assertions) {
@@ -89,7 +102,13 @@ pub fn run() {
                     let _ = child.kill();
                 }
             }
+            if let Some(state) = app_handle.try_state::<ConverterSidecar>() {
+                if let Some(child) = state.0.lock().unwrap().take() {
+                    let _ = child.kill();
+                }
+            }
             kill_pdf_bridge_tree();
+            kill_pdf_converter_tree();
         }
     });
 }
@@ -101,11 +120,29 @@ pub fn run() {
 /// bootloader does not kill that grandchild, so it's left running (still
 /// bound to the bridge port) after the app closes. `taskkill /T` kills the
 /// whole process tree by image name, which reliably takes out both. This
-/// app is the only thing that spawns pdf-bridge.exe, so it's safe to target
-/// every instance of it rather than tracking PIDs through the bootloader.
+/// app is the only thing that spawns these sidecars, so it's safe to target
+/// every instance rather than tracking PIDs through the bootloader. Tauri
+/// uses the target-triple names during development and renames them for the
+/// installed bundle, so clean up both forms.
 fn kill_pdf_bridge_tree() {
-    let _ = std::process::Command::new("taskkill")
-        .args(["/F", "/IM", "pdf-bridge.exe", "/T"])
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .status();
+    kill_sidecar_trees(&["pdf-bridge.exe", "pdf-bridge-x86_64-pc-windows-msvc.exe"]);
+}
+
+/// The converter can spawn Tesseract child processes while OCR is running.
+/// Kill the entire tree on app shutdown so a stale converter cannot keep its
+/// localhost port or job database open for the next launch.
+fn kill_pdf_converter_tree() {
+    kill_sidecar_trees(&[
+        "pdf-converter.exe",
+        "pdf-converter-x86_64-pc-windows-msvc.exe",
+    ]);
+}
+
+fn kill_sidecar_trees(image_names: &[&str]) {
+    for image_name in image_names {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", image_name, "/T"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .status();
+    }
 }

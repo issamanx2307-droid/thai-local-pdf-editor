@@ -749,6 +749,29 @@
   width: min(520px, 100%);
 }
 
+.convert-dialog {
+  width: min(440px, 100%);
+}
+
+.convert-progress-track {
+  width: 100%;
+  height: 10px;
+  border-radius: 6px;
+  background: #dce6f4;
+  overflow: hidden;
+}
+
+.convert-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2c73e7, #1557c0);
+  transition: width 0.3s ease;
+}
+
+.convert-error {
+  color: #b3261e;
+}
+
+
 .guide-heading {
   display: flex;
   align-items: center;

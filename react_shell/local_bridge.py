@@ -15,6 +15,8 @@ import logging
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -41,6 +43,7 @@ from thai_pdf_editor.app.worker_contract import (
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5178
+CONVERTER_BASE_URL = "http://127.0.0.1:5179"
 BRIDGE_NAME = "thai-pdf-react-bridge"
 DEFAULT_DEV_ORIGIN = "http://127.0.0.1:5173"
 MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
@@ -120,6 +123,26 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if parsed.path == "/api/converter/health":
+            self._proxy_converter("GET", "/health")
+            return
+
+        if parsed.path.startswith("/api/converter/jobs/") and parsed.path.endswith("/download"):
+            job_id = parsed.path.removeprefix("/api/converter/jobs/").removesuffix("/download")
+            if job_id and "/" not in job_id:
+                self._proxy_converter_download(job_id)
+                return
+            self._send_error(HTTPStatus.NOT_FOUND, "route not found")
+            return
+
+        if parsed.path.startswith("/api/converter/jobs/"):
+            job_id = parsed.path.removeprefix("/api/converter/jobs/")
+            if job_id and "/" not in job_id:
+                self._proxy_converter("GET", f"/api/v1/jobs/{job_id}")
+                return
+            self._send_error(HTTPStatus.NOT_FOUND, "route not found")
+            return
+
         if parsed.path.startswith("/api/previews/"):
             self._send_preview(parsed.path.removeprefix("/api/previews/"))
             return
@@ -145,6 +168,26 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
                     self._send_json(_save_uploaded_pdf(request))
                 except ValueError as exc:
                     self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+
+        if parsed.path == "/api/converter/jobs":
+            request = self._read_json()
+            if request is not None:
+                self._proxy_converter("POST", "/api/v1/local/jobs", request)
+            return
+
+        if parsed.path.startswith("/api/converter/jobs/") and (
+            parsed.path.endswith("/cancel") or parsed.path.endswith("/retry")
+        ):
+            suffix = parsed.path.removeprefix("/api/converter/jobs/")
+            job_id, _, action = suffix.rpartition("/")
+            if job_id and "/" not in job_id and action in {"cancel", "retry"}:
+                # cancel/retry take no request body upstream; still drain any
+                # body the client sent so the connection stays clean.
+                self._drain_request_body()
+                self._proxy_converter("POST", f"/api/v1/jobs/{job_id}/{action}")
+            else:
+                self._send_error(HTTPStatus.NOT_FOUND, "route not found")
             return
 
         if parsed.path != "/api/worker":
@@ -250,6 +293,100 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _proxy_converter(self, method: str, target_path: str, payload: dict[str, Any] | None = None) -> None:
+        """Forward a fixed, JSON-only converter API surface through this bridge."""
+        if target_path == "/health":
+            allowed = method == "GET"
+        elif target_path == "/api/v1/local/jobs":
+            allowed = method == "POST"
+        elif target_path.startswith("/api/v1/jobs/"):
+            suffix = target_path.removeprefix("/api/v1/jobs/")
+            allowed = bool(suffix) and (method == "GET" or suffix.endswith("/cancel") or suffix.endswith("/retry"))
+        else:
+            allowed = False
+        if not allowed:
+            self._send_error(HTTPStatus.NOT_FOUND, "converter route not found")
+            return
+
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+        request = urllib.request.Request(
+            f"{CONVERTER_BASE_URL}{target_path}",
+            data=data,
+            method=method,
+            headers={"Content-Type": "application/json"} if data is not None else {},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                response_data = response.read()
+                status = HTTPStatus(response.status)
+        except urllib.error.HTTPError as exc:
+            response_data = exc.read()
+            status = HTTPStatus(exc.code)
+        except (urllib.error.URLError, TimeoutError) as exc:
+            LOGGER.warning("converter unavailable: %s", exc)
+            self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "บริการแปลง PDF ยังไม่พร้อม")
+            return
+
+        try:
+            converted = json.loads(response_data.decode("utf-8"))
+            if isinstance(converted, dict) and isinstance(converted.get("download_url"), str):
+                converted["download_url"] = f"/api/converter{converted['download_url']}"
+            response_data = json.dumps(converted, ensure_ascii=False).encode("utf-8")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        self.send_response(status)
+        self._send_common_headers(content_type="application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(response_data)))
+        self.end_headers()
+        self.wfile.write(response_data)
+
+    def _proxy_converter_download(self, job_id: str) -> None:
+        """Stream a finished conversion result through as binary, not JSON."""
+        request = urllib.request.Request(
+            f"{CONVERTER_BASE_URL}/api/v1/jobs/{job_id}/download",
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = response.read()
+                status = HTTPStatus(response.status)
+                content_type = response.headers.get("Content-Type", "application/octet-stream")
+                disposition = response.headers.get("Content-Disposition")
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read()
+            self.send_response(HTTPStatus(exc.code))
+            self._send_common_headers(content_type="application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(error_body)))
+            self.end_headers()
+            self.wfile.write(error_body)
+            return
+        except (urllib.error.URLError, TimeoutError) as exc:
+            LOGGER.warning("converter download unavailable: %s", exc)
+            self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "บริการแปลง PDF ยังไม่พร้อม")
+            return
+
+        self.send_response(status)
+        self._send_common_headers(content_type=content_type)
+        if disposition:
+            self.send_header("Content-Disposition", disposition)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _drain_request_body(self) -> None:
+        """Consume an optional request body without requiring or parsing JSON."""
+        length_text = self.headers.get("Content-Length", "")
+        transfer_encoding = self.headers.get("Transfer-Encoding", "")
+        try:
+            if length_text:
+                length = int(length_text)
+                if length > 0:
+                    self.rfile.read(length)
+            elif any(item.strip().lower() == "chunked" for item in transfer_encoding.split(",")):
+                self._read_chunked_body()
+        except ValueError:
+            pass
 
     def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")

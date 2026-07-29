@@ -34,3 +34,9 @@ Thumbs.db
 *.bak
 syntax_result.txt
 test_result.txt
+
+# Local converter/OCR test resources
+data/tessdata/
+_e2e_convert.ps1
+data/_e2e_convert_test.pdf
+_e2e_convert_result.*
