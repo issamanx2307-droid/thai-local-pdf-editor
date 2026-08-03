@@ -522,7 +522,20 @@
   color: #164ea9;
   font: 800 12px/1 Tahoma, "Segoe UI", sans-serif;
   cursor: pointer;
+  position: relative;
 }
+
+.update-badge {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e0402a;
+  box-shadow: 0 0 0 2px #ffffff;
+}
+
 
 .tool-tabs button.is-selected {
   border-color: #1f5fcf;

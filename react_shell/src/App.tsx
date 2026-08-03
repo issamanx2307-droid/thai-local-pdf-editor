@@ -216,6 +216,8 @@ function App() {
   const [imageOverlayWidth, setImageOverlayWidth] = useState('140')
   const [signatureText, setSignatureText] = useState('ลายเซ็นภาพ')
   const [cropMarginPercent, setCropMarginPercent] = useState('8')
+  const [updateAvailableVersion, setUpdateAvailableVersion] = useState<string | null>(null)
+  const [appVersion, setAppVersion] = useState('')
   const [replaceSearchText, setReplaceSearchText] = useState('')
   const [replaceTextValue, setReplaceTextValue] = useState('')
   const [replacePageScope, setReplacePageScope] = useState<PageScope>('current')
@@ -406,6 +408,25 @@ function App() {
     },
     [applyResponse, confirmDiscardDirty],
   )
+
+  useEffect(() => {
+    // Silent update check on startup: never interrupts the user, just
+    // surfaces a status-bar note and a badge on the status tab if found.
+    void getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(''))
+
+    void checkForAppUpdate()
+      .then((update) => {
+        if (update) {
+          setUpdateAvailableVersion(update.version)
+          setStatusMessage(`มีอัปเดตใหม่ v${update.version} — ไปที่แท็บ "สถานะ" เพื่อติดตั้ง`)
+        }
+      })
+      .catch(() => {
+        // Silent: no network, no GitHub access, etc. — not worth bothering the user.
+      })
+  }, [])
 
   useEffect(() => {
     // 1. Check if Tauri launched with a file path argument (Explorer double-click)
@@ -1723,6 +1744,8 @@ function App() {
         <ToolPanel
           activeToolTab={activeToolTab}
           activeSearchIndex={activeSearchIndex}
+          appVersion={appVersion}
+          updateAvailableVersion={updateAvailableVersion}
           batchJpgFileNames={batchJpgFileNames}
           bridgeStatus={bridgeStatus}
           cropMarginPercent={cropMarginPercent}
@@ -2582,6 +2605,8 @@ function FallbackPage() {
 function ToolPanel({
   activeToolTab,
   activeSearchIndex,
+  appVersion,
+  updateAvailableVersion,
   batchJpgFileNames,
   bridgeStatus,
   cropMarginPercent,
@@ -2644,6 +2669,8 @@ function ToolPanel({
 }: {
   activeToolTab: ToolTab
   activeSearchIndex: number
+  appVersion: string
+  updateAvailableVersion: string | null
   batchJpgFileNames: string[]
   bridgeStatus: BridgeStatus
   cropMarginPercent: string
@@ -2715,7 +2742,7 @@ function ToolPanel({
       <div className="panel-heading">
         <div>
           <b>เครื่องมือ</b>
-          <span>Bridge: {bridgeStatus}</span>
+          <span>Bridge: {bridgeStatus}{appVersion ? ` · v${appVersion}` : ''}</span>
         </div>
         <FileText size={18} />
       </div>
@@ -2759,6 +2786,7 @@ function ToolPanel({
           type="button"
         >
           สถานะ
+          {updateAvailableVersion ? <span className="update-badge" aria-label="มีอัปเดตใหม่" /> : null}
         </button>
       </div>
       {activeToolTab === 'search' ? (
@@ -3127,7 +3155,7 @@ function ToolPanel({
           </div>
         ))}
       </section>
-      <UpdateSection />
+      <UpdateSection appVersion={appVersion} initialAvailableVersion={updateAvailableVersion} />
       </>
       ) : null}
     </aside>
@@ -3136,17 +3164,19 @@ function ToolPanel({
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'up-to-date' | 'error' | 'installed'
 
-function UpdateSection() {
-  const [status, setStatus] = useState<UpdateStatus>('idle')
-  const [message, setMessage] = useState('')
-  const [availableVersion, setAvailableVersion] = useState<string | null>(null)
-  const [currentVersion, setCurrentVersion] = useState('')
-
-  useEffect(() => {
-    void getVersion()
-      .then(setCurrentVersion)
-      .catch(() => setCurrentVersion(''))
-  }, [])
+function UpdateSection({
+  appVersion,
+  initialAvailableVersion,
+}: {
+  appVersion: string
+  initialAvailableVersion: string | null
+}) {
+  const [status, setStatus] = useState<UpdateStatus>(initialAvailableVersion ? 'available' : 'idle')
+  const [message, setMessage] = useState(
+    initialAvailableVersion ? `พบเวอร์ชันใหม่: ${initialAvailableVersion}` : '',
+  )
+  const [availableVersion, setAvailableVersion] = useState<string | null>(initialAvailableVersion)
+  const currentVersion = appVersion
 
   const checkForUpdate = useCallback(async () => {
     setStatus('checking')
