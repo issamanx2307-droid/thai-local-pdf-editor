@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
+import { getVersion } from '@tauri-apps/api/app'
+import { check as checkForAppUpdate } from '@tauri-apps/plugin-updater'
+import { relaunch } from '@tauri-apps/plugin-process'
 import {
   ArrowDown,
   ArrowLeft,
@@ -3114,6 +3117,7 @@ function ToolPanel({
       </>
       ) : null}
       {activeToolTab === 'status' ? (
+      <>
       <section className="worker-card">
         <h2>Worker Commands</h2>
         {workerCommands.map((command) => (
@@ -3123,8 +3127,111 @@ function ToolPanel({
           </div>
         ))}
       </section>
+      <UpdateSection />
+      </>
       ) : null}
     </aside>
+  )
+}
+
+type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'up-to-date' | 'error' | 'installed'
+
+function UpdateSection() {
+  const [status, setStatus] = useState<UpdateStatus>('idle')
+  const [message, setMessage] = useState('')
+  const [availableVersion, setAvailableVersion] = useState<string | null>(null)
+  const [currentVersion, setCurrentVersion] = useState('')
+
+  useEffect(() => {
+    void getVersion()
+      .then(setCurrentVersion)
+      .catch(() => setCurrentVersion(''))
+  }, [])
+
+  const checkForUpdate = useCallback(async () => {
+    setStatus('checking')
+    setMessage('กำลังตรวจสอบอัปเดต...')
+    try {
+      const update = await checkForAppUpdate()
+      if (update) {
+        setAvailableVersion(update.version)
+        setStatus('available')
+        setMessage(`พบเวอร์ชันใหม่: ${update.version}`)
+      } else {
+        setAvailableVersion(null)
+        setStatus('up-to-date')
+        setMessage('ใช้เวอร์ชันล่าสุดอยู่แล้ว')
+      }
+    } catch (error) {
+      setStatus('error')
+      setMessage(error instanceof Error ? error.message : 'ตรวจสอบอัปเดตไม่สำเร็จ')
+    }
+  }, [])
+
+  const installUpdate = useCallback(async () => {
+    setStatus('downloading')
+    setMessage('กำลังดาวน์โหลดอัปเดต...')
+    try {
+      const update = await checkForAppUpdate()
+      if (!update) {
+        setStatus('up-to-date')
+        setMessage('ไม่มีอัปเดตให้ติดตั้งแล้ว')
+        return
+      }
+      let downloaded = 0
+      let total = 0
+      await update.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          total = event.data.contentLength ?? 0
+        } else if (event.event === 'Progress') {
+          downloaded += event.data.chunkLength
+          setMessage(
+            total
+              ? `กำลังดาวน์โหลด... ${Math.round((downloaded / total) * 100)}%`
+              : 'กำลังดาวน์โหลด...',
+          )
+        } else if (event.event === 'Finished') {
+          setMessage('กำลังติดตั้ง...')
+        }
+      })
+      setStatus('installed')
+      setMessage('ติดตั้งอัปเดตสำเร็จ กำลังรีสตาร์ทแอป...')
+      await relaunch()
+    } catch (error) {
+      setStatus('error')
+      setMessage(error instanceof Error ? error.message : 'ติดตั้งอัปเดตไม่สำเร็จ')
+    }
+  }, [])
+
+  return (
+    <section className="worker-card">
+      <h2>อัปเดตแอป</h2>
+      <div className="command-row">
+        <span>เวอร์ชันปัจจุบัน</span>
+        <small>{currentVersion || 'กำลังโหลด...'}</small>
+      </div>
+      {message ? <p className="empty-tool-note">{message}</p> : null}
+      <div className="inline-fields two-actions">
+        <button
+          className="secondary-action compact-place-action"
+          disabled={status === 'checking' || status === 'downloading'}
+          onClick={() => void checkForUpdate()}
+          type="button"
+        >
+          เช็คอัปเดต
+        </button>
+        {status === 'available' ? (
+          <button
+            className="primary-action compact-place-action"
+            disabled={status !== 'available'}
+            onClick={() => void installUpdate()}
+            type="button"
+          >
+            ติดตั้ง {availableVersion}
+          </button>
+        ) : null}
+      </div>
+    </section>
   )
 }
 
