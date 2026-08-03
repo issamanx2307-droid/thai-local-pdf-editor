@@ -105,7 +105,8 @@ $latestJsonObj = [ordered]@{
         }
     }
 }
-$latestJsonObj | ConvertTo-Json -Depth 5 | Set-Content -Path "$releaseDir\latest.json" -Encoding utf8
+$latestJsonObj | ConvertTo-Json -Depth 5 | Out-String |
+    ForEach-Object { [System.IO.File]::WriteAllText("$releaseDir\latest.json", $_.TrimEnd(), [System.Text.UTF8Encoding]::new($false)) }
 
 Step "Committing and pushing version bump"
 Set-Location $repoRoot
