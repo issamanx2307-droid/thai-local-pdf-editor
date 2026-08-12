@@ -13,7 +13,7 @@ from pathlib import Path
 import fitz
 
 from thai_pdf_editor.app.core.document_state import DocumentState
-from thai_pdf_editor.app.core.errors import PdfOpenError
+from thai_pdf_editor.app.core.errors import PdfOpenError, PdfPasswordRequiredError
 from thai_pdf_editor.app.utils.path_utils import make_working_copy_path
 from thai_pdf_editor.app.utils.validation import require_pdf_path
 
@@ -39,17 +39,35 @@ class PdfDocument:
         """Return True when a document is loaded."""
         return self._doc is not None
 
-    def open(self, source_path: Path) -> None:
-        """Open a PDF from disk and create a safe working copy."""
+    def open(self, source_path: Path, *, password: str | None = None) -> None:
+        """Open a PDF from disk and create a safe working copy.
+
+        If the PDF is password-protected, ``password`` must be supplied.
+        When it is missing or incorrect, ``PdfPasswordRequiredError`` is
+        raised so the caller (UI) can prompt for a password and retry.
+        """
         require_pdf_path(source_path)
         self.close()
         working_copy_path = make_working_copy_path(source_path)
 
         open_error: str | None = None
+        password_error: PdfPasswordRequiredError | None = None
         document: fitz.Document | None = None
         try:
             shutil.copyfile(source_path, working_copy_path)
             document = fitz.open(str(working_copy_path))
+            if document.needs_pass:
+                clean_password = (password or "").strip()
+                if not clean_password:
+                    password_error = PdfPasswordRequiredError(
+                        "ไฟล์นี้มีรหัสผ่าน กรุณากรอกรหัสผ่านเพื่อเปิดไฟล์",
+                        detail="password_required",
+                    )
+                elif not document.authenticate(clean_password):
+                    password_error = PdfPasswordRequiredError(
+                        "รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง",
+                        detail="wrong_password",
+                    )
         except Exception as exc:
             # Log a pre-formatted traceback string rather than passing
             # exc_info=True. Keeping a live traceback object referenced
@@ -61,6 +79,16 @@ class PdfDocument:
                 "failed to open pdf path=%s\n%s", source_path, traceback.format_exc()
             )
             open_error = str(exc)
+
+        if password_error is not None:
+            if document is not None:
+                document.close()
+            if working_copy_path.exists():
+                _remove_working_copy(working_copy_path)
+            LOGGER.info(
+                "pdf requires password path=%s detail=%s", source_path, password_error.detail
+            )
+            raise password_error
 
         if open_error is not None:
             if working_copy_path.exists():

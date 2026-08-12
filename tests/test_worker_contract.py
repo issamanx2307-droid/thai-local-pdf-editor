@@ -638,6 +638,23 @@ def test_worker_lists_printers_for_react_dialog(monkeypatch: pytest.MonkeyPatch,
         session.close()
 
 
+def test_worker_opens_selected_printer_queue(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """The React worker exposes the Windows queue shortcut without a document."""
+    calls: list[str] = []
+    monkeypatch.setattr(worker_module, "open_printer_queue", lambda printer: calls.append(printer))
+    session = PdfWorkerSession(preview_dir=tmp_path / "previews")
+
+    try:
+        response = session.handle(
+            {"command": "open_printer_queue", "payload": {"printer_name": "Printer A"}}
+        )
+        assert response["ok"] is True
+        assert response["payload"]["printer_name"] == "Printer A"
+        assert calls == ["Printer A"]
+    finally:
+        session.close()
+
+
 def test_worker_print_pdf_dispatches_working_copy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

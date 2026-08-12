@@ -78,6 +78,56 @@ def test_print_pdf_starts_internal_worker_without_sumatra(
     assert calls == [(source, "Brother DCP-T720DW Printer", 1, None)]
 
 
+def test_print_pdf_returns_gdi_worker_failure_to_the_ui(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A failed GDI worker must not be hidden behind the shell-print fallback."""
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    monkeypatch.setattr(print_operations, "_find_sumatra", lambda: None)
+    monkeypatch.setattr(print_operations, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        print_operations,
+        "_spawn_gdi_print_worker",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PdfPrintError("เริ่มงานพิมพ์ไม่ได้")),
+    )
+    monkeypatch.setattr(print_operations, "_print_via_shell", lambda *args: pytest.fail("must not hide GDI failure"))
+
+    with pytest.raises(PdfPrintError, match="เริ่มงานพิมพ์ไม่ได้"):
+        print_operations.print_pdf(source, "Printer A")
+
+
+def test_wait_for_print_process_raises_when_backend_fails() -> None:
+    """Backend exit failures are surfaced instead of reported as sent jobs."""
+
+    class FailedProcess:
+        def wait(self, *, timeout: int) -> int:
+            assert timeout == print_operations._PRINT_WORKER_TIMEOUT_SECONDS
+            return 1
+
+    with pytest.raises(PdfPrintError) as exc_info:
+        print_operations._wait_for_print_process(FailedProcess(), backend="test backend")  # type: ignore[arg-type]
+    assert exc_info.value.user_message == "test backend ส่งงานพิมพ์ไม่สำเร็จ"
+
+
+def test_open_printer_queue_uses_selected_printer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The queue shortcut must target the printer currently selected in UI."""
+    calls: list[tuple[list[str], int, bool]] = []
+    monkeypatch.setattr(print_operations, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        print_operations.subprocess,
+        "Popen",
+        lambda args, *, creationflags, close_fds: calls.append((args, creationflags, close_fds)),
+    )
+
+    print_operations.open_printer_queue("Printer A")
+
+    assert calls[0][0] == ["rundll32.exe", "printui.dll,PrintUIEntry", "/o", "/n", "Printer A"]
+    assert calls[0][2] is True
+
+
 def test_print_pdf_wraps_shell_print_association_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

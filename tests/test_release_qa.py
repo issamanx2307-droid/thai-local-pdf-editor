@@ -36,6 +36,8 @@ def test_release_qa_command_plan_includes_required_gates() -> None:
         "start_bat_smoke",
         "stop_bat",
         "final_acceptance",
+        "build_react_bridge",
+        "react_bridge_sidecar_qa",
         "build_exe",
         "exe_smoke",
     ]

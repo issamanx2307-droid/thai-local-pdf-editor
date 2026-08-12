@@ -15,6 +15,10 @@ class PdfOpenError(AppError):
     """Raised when a PDF cannot be opened."""
 
 
+class PdfPasswordRequiredError(AppError):
+    """Raised when a PDF is password-protected and needs a (correct) password."""
+
+
 class PdfSaveError(AppError):
     """Raised when saving a PDF fails."""
 
