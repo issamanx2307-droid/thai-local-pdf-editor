@@ -84,6 +84,23 @@ def get_default_printer() -> str:
         return ""
 
 
+def open_printer_queue(printer_name: str) -> None:
+    """Open the Windows queue window for one installed printer."""
+    printer_name = printer_name.strip()
+    if not printer_name:
+        raise PdfPrintError("กรุณาเลือกเครื่องพิมพ์ก่อนเปิดคิวพิมพ์")
+    if not _is_windows():
+        raise PdfPrintError("การเปิดคิวพิมพ์รองรับเฉพาะ Windows")
+    try:
+        subprocess.Popen(
+            ["rundll32.exe", "printui.dll,PrintUIEntry", "/o", "/n", printer_name],
+            creationflags=_creationflags_no_window(),
+            close_fds=True,
+        )
+    except OSError as exc:
+        raise PdfPrintError("ไม่สามารถเปิดคิวพิมพ์ได้", detail=str(exc)) from exc
+
+
 # ---------------------------------------------------------------------------
 # Page range parsing
 # ---------------------------------------------------------------------------
@@ -188,9 +205,10 @@ def print_pdf(pdf_path: Path, printer_name: str, *, copies: int = 1, pages: str 
     *pages*, if given, is a 1-based page-range spec such as ``"1-3,5,8-9"``.
     Leave it blank (or ``None``) to print every page.
 
-    Tries SumatraPDF first (supports printer selection + copy count);
-    falls back to the Windows shell 'print' verb which opens the system
-    default PDF viewer and triggers its print handler.
+    A successful return means the selected print backend finished accepting the
+    document.  In particular, the internal GDI worker has reached ``EndDoc``;
+    its rendering and printer errors are therefore returned to the UI instead
+    of being silently logged by a detached process.
     """
     pdf_path = Path(pdf_path)
     _validate_print_request(pdf_path, printer_name, copies)
@@ -209,6 +227,8 @@ def print_pdf(pdf_path: Path, printer_name: str, *, copies: int = 1, pages: str 
         try:
             _spawn_gdi_print_worker(pdf_path, printer_name, copies=copies, page_spec=page_spec)
             return
+        except PdfPrintError:
+            raise
         except Exception as exc:  # noqa: BLE001
             _log.warning("internal GDI print worker could not be started: %s", exc)
 
@@ -230,10 +250,11 @@ def _print_via_sumatra(
     settings_parts = [page_spec] if page_spec else []
     settings_parts.append(f"ncopies={copies}")
     settings = ",".join(settings_parts)
-    subprocess.Popen(
+    process = subprocess.Popen(
         [str(sumatra), "-print-to", printer_name, "-print-settings", settings, str(pdf_path)],
         creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
     )
+    _wait_for_print_process(process, backend="SumatraPDF")
 
 
 def _validate_print_request(pdf_path: Path, printer_name: str, copies: int) -> None:
@@ -275,6 +296,22 @@ def _spawn_gdi_print_worker(
         "Started internal PDF print worker pid=%s printer=%s copies=%d pages=%s",
         process.pid, printer_name, copies, page_spec or "all",
     )
+    _wait_for_print_process(process, backend="ตัวช่วยพิมพ์ PDF")
+
+
+def _wait_for_print_process(process: subprocess.Popen[bytes], *, backend: str) -> None:
+    """Wait until a print backend accepts the job or reports a failure."""
+    try:
+        return_code = process.wait(timeout=_PRINT_WORKER_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.wait()
+        raise PdfPrintError(f"{backend} ใช้เวลานานเกินกำหนด", detail=str(exc)) from exc
+    if return_code != 0:
+        raise PdfPrintError(
+            f"{backend} ส่งงานพิมพ์ไม่สำเร็จ",
+            detail=f"process exited with code {return_code}",
+        )
 
 
 def _print_worker_command() -> list[str] | None:

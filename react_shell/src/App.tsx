@@ -47,6 +47,7 @@ import {
   startConverterJob,
   uploadLocalImage,
   uploadLocalPdf,
+  WorkerError,
   type ConverterJob,
   type ConverterOutputFormat,
   type WorkerCommandName,
@@ -108,6 +109,10 @@ type MetadataFields = {
 }
 type PageScope = 'current' | 'all'
 type ToolTab = 'search' | 'edit' | 'data' | 'export' | 'status'
+type PendingPasswordPdf = {
+  path: string
+  fileName: string
+}
 
 const emptyMetadata: MetadataFields = {
   title: '',
@@ -234,6 +239,7 @@ function App() {
   const [printers, setPrinters] = useState<string[]>([])
   const [selectedPrinter, setSelectedPrinter] = useState('')
   const [printCopies, setPrintCopies] = useState('1')
+  const [printPages, setPrintPages] = useState('')
   const [isConvertDialogOpen, setIsConvertDialogOpen] = useState(false)
   const [convertFormat, setConvertFormat] = useState<ConverterOutputFormat>('docx')
   const [convertPageScope, setConvertPageScope] = useState<PageScope>('all')
@@ -244,6 +250,11 @@ function App() {
   const [previewImageSize, setPreviewImageSize] = useState<PreviewImageSize | null>(null)
   const [isViewerExpanded, setIsViewerExpanded] = useState(false)
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false)
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false)
+  const [pendingPasswordPdf, setPendingPasswordPdf] = useState<PendingPasswordPdf | null>(null)
+  const [passwordValue, setPasswordValue] = useState('')
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [isPasswordSubmitting, setIsPasswordSubmitting] = useState(false)
   const appShellRef = useRef<HTMLElement | null>(null)
   const viewerStageRef = useRef<HTMLDivElement | null>(null)
   const openPdfInputRef = useRef<HTMLInputElement | null>(null)
@@ -365,26 +376,21 @@ function App() {
     }
   }, [applyResponse])
 
-  const openPdfByPath = useCallback(
-    async (filePath: string) => {
-      if (!filePath) {
-        return
-      }
-      if (!(await confirmDiscardDirty())) {
-        return
-      }
-
+  const openPdfAtPath = useCallback(
+    async (filePath: string, fileNameLabel: string, password?: string) => {
       setIsBusy(true)
       setLastCommand('open_pdf')
       setBridgeStatus('connecting')
-      const fileName = filePath.split(/[\\/]/).pop() || filePath
-      setStatusMessage(`กำลังเปิด PDF: ${fileName}`)
+      setStatusMessage(`กำลังเปิด PDF: ${fileNameLabel}`)
       try {
         await getBridgeHealth()
         const response = await callWorker({
           command: 'batch',
           commands: [
-            { command: 'open_pdf', payload: { path: filePath } },
+            {
+              command: 'open_pdf',
+              payload: password ? { path: filePath, password } : { path: filePath },
+            },
             { command: 'render_page', payload: { page_index: 0, zoom: defaultZoomPercent / 100 } },
           ],
         })
@@ -397,17 +403,70 @@ function App() {
         setMetadataFields(emptyMetadata)
         setFormFields([])
         setBridgeStatus('ready')
-        setStatusMessage(`เปิดไฟล์แล้ว: ${fileName}`)
+        setStatusMessage(`เปิดไฟล์แล้ว: ${fileNameLabel}`)
+        setIsPasswordDialogOpen(false)
+        setPendingPasswordPdf(null)
+        setPasswordValue('')
+        setPasswordError(null)
       } catch (error) {
-        setBridgeStatus('error')
-        setStatusMessage(error instanceof Error ? error.message : 'เปิดไฟล์ PDF ไม่สำเร็จ')
-        setPreviewUrl(null)
+        if (error instanceof WorkerError && error.type === 'PdfPasswordRequiredError') {
+          setPendingPasswordPdf({ path: filePath, fileName: fileNameLabel })
+          setPasswordError(password ? error.message : null)
+          setIsPasswordDialogOpen(true)
+          setBridgeStatus('idle')
+          setStatusMessage('ไฟล์นี้มีรหัสผ่าน กรุณากรอกรหัสผ่านเพื่อเปิดไฟล์')
+        } else {
+          setBridgeStatus('error')
+          setStatusMessage(error instanceof Error ? error.message : 'เปิดไฟล์ PDF ไม่สำเร็จ')
+          setPreviewUrl(null)
+        }
       } finally {
         setIsBusy(false)
       }
     },
-    [applyResponse, confirmDiscardDirty],
+    [applyResponse],
   )
+
+  const openPdfByPath = useCallback(
+    async (filePath: string) => {
+      if (!filePath) {
+        return
+      }
+      if (!(await confirmDiscardDirty())) {
+        return
+      }
+
+      const fileName = filePath.split(/[\\/]/).pop() || filePath
+      await openPdfAtPath(filePath, fileName)
+    },
+    [confirmDiscardDirty, openPdfAtPath],
+  )
+
+  const submitPdfPassword = useCallback(async () => {
+    if (!pendingPasswordPdf) {
+      return
+    }
+    const password = passwordValue.trim()
+    if (!password) {
+      setPasswordError('กรุณากรอกรหัสผ่าน')
+      return
+    }
+    setIsPasswordSubmitting(true)
+    try {
+      await openPdfAtPath(pendingPasswordPdf.path, pendingPasswordPdf.fileName, password)
+    } finally {
+      setIsPasswordSubmitting(false)
+    }
+  }, [openPdfAtPath, pendingPasswordPdf, passwordValue])
+
+  const cancelPdfPassword = useCallback(() => {
+    setIsPasswordDialogOpen(false)
+    setPendingPasswordPdf(null)
+    setPasswordValue('')
+    setPasswordError(null)
+    setBridgeStatus('idle')
+    setStatusMessage('ยกเลิกการเปิดไฟล์ที่มีรหัสผ่าน')
+  }, [])
 
   useEffect(() => {
     // Silent update check on startup: never interrupts the user, just
@@ -487,35 +546,20 @@ function App() {
       try {
         await getBridgeHealth()
         const uploaded = await uploadLocalPdf(file)
-        const response = await callWorker({
-          command: 'batch',
-          commands: [
-            { command: 'open_pdf', payload: { path: uploaded.path } },
-            { command: 'render_page', payload: { page_index: 0, zoom: defaultZoomPercent / 100 } },
-          ],
-        })
-        applyResponse(response)
-        setSearchQuery('')
-        setSearchResults([])
-        setActiveSearchIndex(-1)
-        setSelectedImagePath(null)
-        setSelectedImageName('')
-        setMetadataFields(emptyMetadata)
-        setFormFields([])
-        setBridgeStatus('ready')
-        setStatusMessage(`เปิดไฟล์แล้ว: ${uploaded.file_name}`)
+        setIsBusy(false)
+        await openPdfAtPath(uploaded.path, uploaded.file_name)
       } catch (error) {
         setBridgeStatus('error')
         setStatusMessage(error instanceof Error ? error.message : 'เปิดไฟล์ PDF ไม่สำเร็จ')
         setPreviewUrl(null)
-      } finally {
         setIsBusy(false)
+      } finally {
         if (openPdfInputRef.current) {
           openPdfInputRef.current.value = ''
         }
       }
     },
-    [applyResponse, confirmDiscardDirty, openPdfByPath],
+    [confirmDiscardDirty, openPdfAtPath],
   )
 
   const renderPage = useCallback(
@@ -1177,6 +1221,7 @@ function App() {
       setPrinters(printerNames)
       setSelectedPrinter(defaultPrinter && printerNames.includes(defaultPrinter) ? defaultPrinter : printerNames[0] || '')
       setPrintCopies('1')
+      setPrintPages('')
       setIsPrintDialogOpen(true)
       setBridgeStatus('ready')
       setStatusMessage(printerNames.length > 0 ? 'เลือกเครื่องพิมพ์ก่อนส่งงานพิมพ์' : 'ไม่พบเครื่องพิมพ์ในเครื่องนี้')
@@ -1193,6 +1238,23 @@ function App() {
     setStatusMessage('ปิดหน้าต่างพิมพ์')
   }, [])
 
+  const openPrinterQueue = useCallback(async () => {
+    if (!selectedPrinter) {
+      setStatusMessage('กรุณาเลือกเครื่องพิมพ์ก่อนเปิดคิวพิมพ์')
+      return
+    }
+    setIsBusy(true)
+    setLastCommand('open_printer_queue')
+    try {
+      await callWorker({ command: 'open_printer_queue', payload: { printer_name: selectedPrinter } })
+      setStatusMessage(`เปิดคิวพิมพ์แล้ว → ${selectedPrinter}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'ไม่สามารถเปิดคิวพิมพ์ได้')
+    } finally {
+      setIsBusy(false)
+    }
+  }, [selectedPrinter])
+
   const submitPrintJob = useCallback(async () => {
     if (!selectedPrinter) {
       setStatusMessage('กรุณาเลือกเครื่องพิมพ์ก่อนพิมพ์')
@@ -1205,7 +1267,10 @@ function App() {
     setLastCommand('print_pdf')
     setStatusMessage(`กำลังส่งพิมพ์ → ${selectedPrinter}`)
     try {
-      await callWorker({ command: 'print_pdf', payload: { printer_name: selectedPrinter, copies } })
+      await callWorker({
+        command: 'print_pdf',
+        payload: { printer_name: selectedPrinter, copies, pages: printPages.trim() || undefined },
+      })
       setBridgeStatus('ready')
       setIsPrintDialogOpen(false)
       setStatusMessage(`ส่งคำสั่งพิมพ์แล้ว → ${selectedPrinter}`)
@@ -1215,7 +1280,7 @@ function App() {
     } finally {
       setIsBusy(false)
     }
-  }, [printCopies, selectedPrinter])
+  }, [printCopies, printPages, selectedPrinter])
 
   const clearConvertPoll = useCallback(() => {
     if (convertPollRef.current !== null) {
@@ -1844,17 +1909,31 @@ function App() {
       {isPrintDialogOpen ? (
         <PrintDialog
           copies={printCopies}
+          pages={printPages}
           isBusy={isBusy}
           printers={printers}
           selectedPrinter={selectedPrinter}
           onClose={closePrintDialog}
           onCopiesChange={setPrintCopies}
+          onPagesChange={setPrintPages}
           onPrinterChange={setSelectedPrinter}
+          onOpenQueue={() => void openPrinterQueue()}
           onSubmit={() => void submitPrintJob()}
         />
       ) : null}
       {isGuideOpen ? <GuideDialog onClose={closeGuide} /> : null}
       {isDiscardDialogOpen ? <DiscardChangesDialog onCancel={() => answerDiscardPrompt(false)} onConfirm={() => answerDiscardPrompt(true)} /> : null}
+      {isPasswordDialogOpen ? (
+        <PasswordPromptDialog
+          error={passwordError}
+          fileName={pendingPasswordPdf?.fileName ?? ''}
+          isSubmitting={isPasswordSubmitting}
+          password={passwordValue}
+          onCancel={cancelPdfPassword}
+          onPasswordChange={setPasswordValue}
+          onSubmit={() => void submitPdfPassword()}
+        />
+      ) : null}
       {isConvertDialogOpen ? (
         <ConvertDialog
           error={convertError}
@@ -1985,21 +2064,27 @@ function Toolbar({
 
 function PrintDialog({
   copies,
+  pages,
   isBusy,
   printers,
   selectedPrinter,
   onClose,
   onCopiesChange,
+  onPagesChange,
   onPrinterChange,
+  onOpenQueue,
   onSubmit,
 }: {
   copies: string
+  pages: string
   isBusy: boolean
   printers: string[]
   selectedPrinter: string
   onClose: () => void
   onCopiesChange: (value: string) => void
+  onPagesChange: (value: string) => void
   onPrinterChange: (value: string) => void
+  onOpenQueue: () => void
   onSubmit: () => void
 }) {
   return (
@@ -2016,7 +2101,7 @@ function PrintDialog({
         <div className="guide-heading">
           <div>
             <b id="print-title">พิมพ์เอกสาร</b>
-            <span>เลือกเครื่องพิมพ์ในเครื่องก่อนส่งคำสั่ง</span>
+            <span>เว้นช่วงหน้าไว้หากต้องการพิมพ์ทั้งหมด; ขนาดกระดาษและคุณภาพตั้งได้จากคิวของเครื่องพิมพ์</span>
           </div>
           <button aria-label="ปิดหน้าต่างพิมพ์" className="icon-action" disabled={isBusy} onClick={onClose} type="button">
             <X size={18} />
@@ -2049,7 +2134,20 @@ function PrintDialog({
               value={copies}
             />
           </label>
+          <label className="print-field">
+            <span>หน้าที่จะพิมพ์</span>
+            <input
+              disabled={isBusy}
+              onChange={(event) => onPagesChange(event.currentTarget.value)}
+              placeholder="ทั้งหมด (เช่น 1-3,5)"
+              type="text"
+              value={pages}
+            />
+          </label>
           <div className="dialog-actions">
+            <button className="secondary-action" disabled={isBusy || !selectedPrinter} onClick={onOpenQueue} type="button">
+              คิว/ตั้งค่าเครื่องพิมพ์
+            </button>
             <button className="secondary-action" disabled={isBusy} onClick={onClose} type="button">
               ยกเลิก
             </button>
@@ -2230,6 +2328,81 @@ function ConvertDialog({
               </div>
             </>
           )}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function PasswordPromptDialog({
+  error,
+  fileName,
+  isSubmitting,
+  password,
+  onCancel,
+  onPasswordChange,
+  onSubmit,
+}: {
+  error: string | null
+  fileName: string
+  isSubmitting: boolean
+  password: string
+  onCancel: () => void
+  onPasswordChange: (value: string) => void
+  onSubmit: () => void
+}) {
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !isSubmitting) {
+          onCancel()
+        }
+      }}
+      role="presentation"
+    >
+      <section aria-labelledby="password-title" aria-modal="true" className="print-dialog" role="dialog">
+        <div className="guide-heading">
+          <div>
+            <b id="password-title">ไฟล์นี้มีรหัสผ่าน</b>
+            <span>{fileName ? `กรุณากรอกรหัสผ่านเพื่อเปิด: ${fileName}` : 'กรุณากรอกรหัสผ่านเพื่อเปิดไฟล์นี้'}</span>
+          </div>
+          <button
+            aria-label="ปิดหน้าต่างกรอกรหัสผ่าน"
+            className="icon-action"
+            disabled={isSubmitting}
+            onClick={onCancel}
+            type="button"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="print-content">
+          <label className="print-field">
+            <span>รหัสผ่าน</span>
+            <input
+              autoFocus
+              disabled={isSubmitting}
+              onChange={(event) => onPasswordChange(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  onSubmit()
+                }
+              }}
+              type="password"
+              value={password}
+            />
+          </label>
+          {error ? <p className="dialog-message convert-error">{error}</p> : null}
+          <div className="dialog-actions">
+            <button className="secondary-action" disabled={isSubmitting} onClick={onCancel} type="button">
+              ยกเลิก
+            </button>
+            <button className="primary-action" disabled={isSubmitting || !password.trim()} onClick={onSubmit} type="button">
+              {isSubmitting ? 'กำลังเปิดไฟล์...' : 'เปิดไฟล์'}
+            </button>
+          </div>
         </div>
       </section>
     </div>

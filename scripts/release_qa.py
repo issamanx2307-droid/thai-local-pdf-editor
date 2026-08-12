@@ -85,6 +85,8 @@ def release_commands(*, include_build: bool) -> list[QaCommand]:
     if include_build:
         commands.extend(
             [
+                QaCommand("build_react_bridge", ["cmd", "/c", "scripts\\build_react_bridge.bat"]),
+                QaCommand("react_bridge_sidecar_qa", [sys.executable, "scripts/react_bridge_sidecar_qa.py"]),
                 QaCommand("build_exe", ["cmd", "/c", "scripts\\build_exe.bat"]),
                 QaCommand("exe_smoke", ["dist\\ThaiLocalPdfEditor\\ThaiLocalPdfEditor.exe", "--smoke-test"]),
             ]

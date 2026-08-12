@@ -38,7 +38,7 @@ from thai_pdf_editor.app.core.page_operations import PageOperations, merge_pdfs
 from thai_pdf_editor.app.core.pdf_document import PdfDocument
 from thai_pdf_editor.app.core.pdf_renderer import PdfRenderer
 from thai_pdf_editor.app.core.pdf_search import search_pdf_text
-from thai_pdf_editor.app.core.print_operations import get_default_printer, list_printers, print_pdf
+from thai_pdf_editor.app.core.print_operations import get_default_printer, list_printers, open_printer_queue, print_pdf
 from thai_pdf_editor.app.core.save_manager import SaveManager
 from thai_pdf_editor.app.core.signature_operations import create_visual_signature_image
 from thai_pdf_editor.app.core.text_edit_operations import (
@@ -71,6 +71,7 @@ from thai_pdf_editor.app.worker_contract import (
     COMMAND_MERGE_PDFS,
     COMMAND_MOVE_PAGE,
     COMMAND_OPEN_PDF,
+    COMMAND_OPEN_PRINTER_QUEUE,
     COMMAND_PRINT_PDF,
     COMMAND_RENDER_PAGE,
     COMMAND_REDO_PENDING,
@@ -126,6 +127,8 @@ class PdfWorkerSession:
                 return self._update_form_fields(payload)
             if command == COMMAND_LIST_PRINTERS:
                 return self._list_printers()
+            if command == COMMAND_OPEN_PRINTER_QUEUE:
+                return self._open_printer_queue(payload)
             if command == COMMAND_MERGE_PDFS:
                 return self._merge_pdfs(payload)
             if command == COMMAND_MOVE_PAGE:
@@ -195,8 +198,9 @@ class PdfWorkerSession:
         path_text = str(payload.get("path") or "")
         if not path_text:
             raise InvalidOperationError("กรุณาเลือกไฟล์ PDF")
+        password_text = str(payload.get("password") or "").strip() or None
         self.renderer.clear_cache()
-        self.document.open(Path(path_text))
+        self.document.open(Path(path_text), password=password_text)
         return success_response(COMMAND_OPEN_PDF, self.state, {"path": str(self.state.current_file_path)})
 
     def _render_page(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -362,6 +366,16 @@ class PdfWorkerSession:
                 "pages": pages_text,
                 "source_path": str(source_path),
             },
+        )
+
+    def _open_printer_queue(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Open the selected printer's Windows queue without requiring a PDF."""
+        printer_name = str(payload.get("printer_name") or "").strip()
+        open_printer_queue(printer_name)
+        return success_response(
+            COMMAND_OPEN_PRINTER_QUEUE,
+            self.state,
+            {"printer_name": printer_name},
         )
 
     def _undo_pending(self) -> dict[str, Any]:

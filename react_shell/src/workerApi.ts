@@ -22,6 +22,7 @@ export type WorkerCommandName =
   | 'merge_pdfs'
   | 'move_page'
   | 'open_pdf'
+  | 'open_printer_queue'
   | 'print_pdf'
   | 'render_page'
   | 'redo_pending'
@@ -148,6 +149,25 @@ export async function getBridgeHealth(retries = 10, delayMs = 300): Promise<{
   throw lastError || new Error('ไม่สามารถเชื่อมต่อบริการประมวลผล PDF ได้')
 }
 
+export class WorkerError extends Error {
+  type?: string
+  detail?: string
+
+  constructor(message: string, options?: { type?: string; detail?: string }) {
+    super(message)
+    this.name = 'WorkerError'
+    this.type = options?.type
+    this.detail = options?.detail
+  }
+}
+
+function firstWorkerError(response: WorkerResponse): WorkerResponse['error'] | undefined {
+  if (response.error) {
+    return response.error
+  }
+  return response.responses?.find((item) => item.ok === false)?.error
+}
+
 export async function callWorker(request: WorkerRequest): Promise<WorkerResponse> {
   const response = await fetchJson<WorkerResponse>('/api/worker', {
     method: 'POST',
@@ -155,7 +175,11 @@ export async function callWorker(request: WorkerRequest): Promise<WorkerResponse
     body: JSON.stringify(request),
   })
   if (!response.ok) {
-    throw new Error(response.error?.message || 'worker ทำงานไม่สำเร็จ')
+    const failure = firstWorkerError(response)
+    throw new WorkerError(failure?.message || 'worker ทำงานไม่สำเร็จ', {
+      type: failure?.type,
+      detail: failure?.detail,
+    })
   }
   return response
 }
