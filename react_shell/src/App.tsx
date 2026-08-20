@@ -68,6 +68,7 @@ const fallbackPages: number[] = []
 const defaultZoomPercent = 100
 const minZoomPercent = 50
 const maxZoomPercent = 240
+type ViewerMode = 'single' | 'continuous'
 
 const commandNames: WorkerCommandName[] = [
   'add_highlight_overlay',
@@ -256,6 +257,7 @@ function App() {
   const convertPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [previewImageSize, setPreviewImageSize] = useState<PreviewImageSize | null>(null)
   const [isViewerExpanded, setIsViewerExpanded] = useState(false)
+  const [viewerMode, setViewerMode] = useState<ViewerMode>('single')
   const [isPagePanelHidden, setIsPagePanelHidden] = useState(false)
   const [isToolPanelHidden, setIsToolPanelHidden] = useState(false)
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false)
@@ -576,7 +578,7 @@ function App() {
         }
       }
     },
-    [confirmDiscardDirty, openPdfAtPath],
+    [confirmDiscardDirty, openPdfAtPath, openPdfByPath],
   )
 
   const renderPage = useCallback(
@@ -643,6 +645,28 @@ function App() {
       return next
     })
   }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) {
+        return
+      }
+      if (!hasDocument || isBusy || event.altKey || event.ctrlKey || event.metaKey) {
+        return
+      }
+      if (event.key === 'PageDown') {
+        event.preventDefault()
+        void renderPage(Math.min(totalPages - 1, selectedPageIndex + 1))
+      }
+      if (event.key === 'PageUp') {
+        event.preventDefault()
+        void renderPage(Math.max(0, selectedPageIndex - 1))
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [hasDocument, isBusy, renderPage, selectedPageIndex, totalPages])
 
   const moveSelectedPage = useCallback(
     async (direction: -1 | 1) => {
@@ -1784,6 +1808,7 @@ function App() {
         isPagePanelHidden={isPagePanelHidden}
         isToolPanelHidden={isToolPanelHidden}
         isViewerExpanded={isViewerExpanded}
+        viewerMode={viewerMode}
         isBusy={isBusy}
         searchResultSummary={searchResultSummary}
         selectedPage={selectedPageNumber}
@@ -1812,6 +1837,7 @@ function App() {
         onTogglePagePanel={() => setIsPagePanelHidden((hidden) => !hidden)}
         onToggleToolPanel={() => setIsToolPanelHidden((hidden) => !hidden)}
         onToggleViewerExpanded={toggleViewerExpanded}
+        onViewerModeChange={setViewerMode}
         onUndo={() => void runPendingHistory('undo_pending')}
         onZoomIn={() => void renderPage(selectedPageIndex, Math.min(maxZoomPercent, zoomPercent + 10))}
         onZoomOut={() => void renderPage(selectedPageIndex, Math.max(minZoomPercent, zoomPercent - 10))}
@@ -1839,6 +1865,8 @@ function App() {
           stageRef={viewerStageRef}
           selectedPage={selectedPageNumber}
           statusMessage={statusMessage}
+          totalPages={totalPages}
+          viewerMode={viewerMode}
           zoom={zoomPercent}
         />
         <ToolPanel
@@ -1996,6 +2024,7 @@ function Toolbar({
   isPagePanelHidden,
   isToolPanelHidden,
   isViewerExpanded,
+  viewerMode,
   isBusy,
   searchResultSummary,
   selectedPage,
@@ -2018,6 +2047,7 @@ function Toolbar({
   onTogglePagePanel,
   onToggleToolPanel,
   onToggleViewerExpanded,
+  onViewerModeChange,
   onUndo,
   onZoomIn,
   onZoomOut,
@@ -2028,6 +2058,7 @@ function Toolbar({
   isPagePanelHidden: boolean
   isToolPanelHidden: boolean
   isViewerExpanded: boolean
+  viewerMode: ViewerMode
   isBusy: boolean
   searchResultSummary: string
   selectedPage: number
@@ -2050,6 +2081,7 @@ function Toolbar({
   onTogglePagePanel: () => void
   onToggleToolPanel: () => void
   onToggleViewerExpanded: () => void
+  onViewerModeChange: (mode: ViewerMode) => void
   onUndo: () => void
   onZoomIn: () => void
   onZoomOut: () => void
@@ -2082,6 +2114,8 @@ function Toolbar({
           <ToolButton icon={<ZoomOut />} label="ซูม-" disabled={isBusy || !hasDocument} onClick={onZoomOut} />
           <div className="zoom-readout" aria-live="polite">{zoom}%</div>
           <ToolButton icon={<ZoomIn />} label="ซูม+" disabled={isBusy || !hasDocument} onClick={onZoomIn} />
+          <ToolButton icon={<FileText />} label="เดี่ยว" active={viewerMode === 'single'} disabled={!hasDocument} onClick={() => onViewerModeChange('single')} />
+          <ToolButton icon={<Layers />} label="ต่อเนื่อง" active={viewerMode === 'continuous'} disabled={!hasDocument} onClick={() => onViewerModeChange('continuous')} />
           <ToolButton icon={<Maximize2 />} label="กว้าง" disabled={isBusy || !hasDocument} onClick={onFitWidth} />
           <ToolButton icon={<Maximize2 />} label="พอดีหน้า" wide disabled={isBusy || !hasDocument} onClick={onFitHeight} />
           <ToolButton icon={<Maximize2 />} label={isViewerExpanded ? 'ย่อจอ' : 'เต็มจอ'} disabled={isBusy} onClick={onToggleViewerExpanded} />
@@ -2663,6 +2697,8 @@ function Viewer({
   stageRef,
   selectedPage,
   statusMessage,
+  totalPages,
+  viewerMode,
   zoom,
 }: {
   bridgeStatus: BridgeStatus
@@ -2674,6 +2710,8 @@ function Viewer({
   stageRef: RefObject<HTMLDivElement | null>
   selectedPage: number
   statusMessage: string
+  totalPages: number
+  viewerMode: ViewerMode
   zoom: number
 }) {
   const bottomScrollRef = useRef<HTMLDivElement | null>(null)
@@ -2742,11 +2780,23 @@ function Viewer({
     }
   }, [previewUrl, stageRef, zoom])
 
+  useEffect(() => {
+    if (viewerMode !== 'continuous') {
+      return
+    }
+    const page = stageRef.current?.querySelector(`[data-page-number="${selectedPage}"]`)
+    if (page instanceof HTMLElement) {
+      page.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    }
+  }, [selectedPage, stageRef, viewerMode])
+
   return (
     <section className="viewer" aria-label="พื้นที่แสดง PDF">
       <div ref={stageRef} className="viewer-stage" style={{ '--viewer-zoom': `${zoom / 100}` } as CSSProperties}>
-        <div className={`document-page ${previewUrl || documentViewerUrl ? 'is-worker-preview' : 'is-fallback'}`}>
-          {!useRasterPreview && documentViewerUrl ? (
+        <div className={`document-page ${viewerMode === 'continuous' ? 'is-continuous' : ''} ${previewUrl || documentViewerUrl ? 'is-worker-preview' : 'is-fallback'}`}>
+          {!useRasterPreview && documentViewerUrl && viewerMode === 'continuous' ? (
+            <PdfVectorDocument documentUrl={documentViewerUrl} pageCount={totalPages} zoom={zoom} />
+          ) : !useRasterPreview && documentViewerUrl ? (
             <PdfVectorPage documentUrl={documentViewerUrl} pageNumber={selectedPage} zoom={zoom} />
           ) : previewUrl ? (
             <img
@@ -2845,6 +2895,57 @@ function PdfVectorPage({ documentUrl, pageNumber, zoom }: { documentUrl: string;
     return <div className="viewer-native-error">{error}</div>
   }
   return <canvas ref={canvasRef} className="pdf-vector-canvas" aria-label={`เอกสาร PDF หน้า ${pageNumber}`} />
+}
+
+function PdfVectorDocument({ documentUrl, pageCount, zoom }: { documentUrl: string; pageCount: number; zoom: number }) {
+  const canvasRefs = useRef(new Map<number, HTMLCanvasElement>())
+  const [error, setError] = useState<string | null>(null)
+  const pageNumbers = useMemo(() => Array.from({ length: pageCount }, (_, index) => index + 1), [pageCount])
+
+  useEffect(() => {
+    let cancelled = false
+    let documentProxy: PDFDocumentProxy | null = null
+    const renderTasks: Array<{ cancel: () => void }> = []
+    const render = async () => {
+      try {
+        setError(null)
+        const loadingTask = getDocument({ url: documentUrl })
+        documentProxy = await loadingTask.promise
+        for (const pageNumber of pageNumbers) {
+          const canvas = canvasRefs.current.get(pageNumber)
+          if (cancelled || !canvas) {
+            return
+          }
+          const page = await documentProxy.getPage(pageNumber)
+          const outputScale = window.devicePixelRatio || 1
+          const cssViewport = page.getViewport({ scale: zoom / 100 })
+          const renderViewport = page.getViewport({ scale: (zoom / 100) * outputScale })
+          canvas.width = Math.ceil(renderViewport.width)
+          canvas.height = Math.ceil(renderViewport.height)
+          canvas.style.width = `${Math.ceil(cssViewport.width)}px`
+          canvas.style.height = `${Math.ceil(cssViewport.height)}px`
+          const task = page.render({ canvas, viewport: renderViewport })
+          renderTasks.push(task)
+          await task.promise
+        }
+      } catch (renderError) {
+        if (!cancelled) {
+          setError(renderError instanceof Error ? renderError.message : 'แสดง PDF ต่อเนื่องไม่สำเร็จ')
+        }
+      }
+    }
+    void render()
+    return () => {
+      cancelled = true
+      renderTasks.forEach((task) => task.cancel())
+      documentProxy?.destroy()
+    }
+  }, [documentUrl, pageNumbers, zoom])
+
+  if (error) {
+    return <div className="viewer-native-error">{error}</div>
+  }
+  return <div className="pdf-continuous-pages">{pageNumbers.map((pageNumber) => <canvas key={pageNumber} ref={(canvas) => { if (canvas) canvasRefs.current.set(pageNumber, canvas); else canvasRefs.current.delete(pageNumber) }} className="pdf-vector-canvas continuous-page" data-page-number={pageNumber} aria-label={`เอกสาร PDF หน้า ${pageNumber}`} />)}</div>
 }
 
 function FallbackPage() {

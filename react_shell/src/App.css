@@ -416,6 +416,16 @@
   box-shadow: 0 2px 18px rgba(16, 32, 61, 0.18);
 }
 
+.document-page.is-continuous {
+  width: min-content;
+}
+
+.pdf-continuous-pages {
+  display: grid;
+  gap: 18px;
+  padding-bottom: 18px;
+}
+
 .viewer-native-error {
   width: 520px;
   padding: 24px;

@@ -29,3 +29,15 @@ def test_open_batch_activates_the_native_pdf_viewer() -> None:
 
     assert "responseHasCommand(response, 'open_pdf')" in app_source
     assert "function responseHasCommand" in worker_api_source
+
+
+def test_react_viewer_offers_continuous_mode_and_keyboard_paging() -> None:
+    """The dense viewer keeps PDFgear-style continuous viewing discoverable."""
+    app_source = (PROJECT_ROOT / "react_shell" / "src" / "App.tsx").read_text(encoding="utf-8")
+    app_css = (PROJECT_ROOT / "react_shell" / "src" / "App.css").read_text(encoding="utf-8")
+
+    assert "type ViewerMode = 'single' | 'continuous'" in app_source
+    assert "PdfVectorDocument" in app_source
+    assert "event.key === 'PageDown'" in app_source
+    assert "event.key === 'PageUp'" in app_source
+    assert ".pdf-continuous-pages" in app_css
