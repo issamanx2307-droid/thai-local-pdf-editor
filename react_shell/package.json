@@ -1,7 +1,7 @@
 {
   "name": "react_shell",
   "private": true,
-  "version": "12.8.69",
+  "version": "12.8.70",
   "type": "module",
   "scripts": {
     "bridge": "python local_bridge.py --host 127.0.0.1 --port 5178",

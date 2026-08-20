@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Thai Local PDF Editor",
-  "version": "12.8.69",
+  "version": "12.8.70",
   "identifier": "th.localpdfeditor.app",
   "build": {
     "frontendDist": "../dist",
