@@ -785,6 +785,11 @@ class PdfWorkerSession:
         destination_text = str(payload.get("destination_path") or "").strip()
         destination_path = Path(destination_text) if destination_text else self._default_save_copy_path()
         saved_path = self.save_manager.save_as(self.document.raw, self.state, destination_path)
+        # Continue editing the saved copy, not the pre-save in-memory source.
+        # In particular, pending overlays/redactions are applied during the
+        # safe-save pass, so reopening makes the clean PDF.js viewer and the
+        # next edit operation see exactly the bytes the user just saved.
+        self.document.open(saved_path)
         self.renderer.clear_cache()
         return success_response(
             COMMAND_SAVE_COPY,

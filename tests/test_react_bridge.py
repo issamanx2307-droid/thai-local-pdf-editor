@@ -59,6 +59,11 @@ def test_react_bridge_handles_worker_batch_and_serves_preview(tmp_path) -> None:
         assert preview["status"] == 200
         assert preview["content_type"] == "image/png"
         assert preview["body"].startswith(b"\x89PNG")
+
+        active_document = _raw_request(port, "GET", "/api/document.pdf")
+        assert active_document["status"] == 200
+        assert active_document["content_type"] == "application/pdf"
+        assert active_document["body"].startswith(b"%PDF-")
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -15,6 +15,11 @@ from thai_pdf_editor.app.ui.theme import (
     ribbon_button_style,
 )
 
+# A ribbon uses two-line button labels.  Keep its requested height compact
+# across Windows DPI settings while leaving enough room for the 62px physical
+# touch target required by the UI spec.
+COMPACT_TOOLBAR_HEIGHT = 90
+
 
 class Toolbar(ctk.CTkFrame):
     """Top action toolbar grouped like a desktop ribbon."""
@@ -51,6 +56,11 @@ class Toolbar(ctk.CTkFrame):
             border_color=COLORS["border"],
         )
         self.on_go_to_page = on_go_to_page
+        # ``height`` is scaled by CustomTkinter.  Letting grid propagate here
+        # makes a 125%-scaled display request 131px, which wastes vertical
+        # space and violates the compact-ribbon layout contract.
+        self.configure(height=COMPACT_TOOLBAR_HEIGHT)
+        self.grid_propagate(False)
         for column in range(16):
             self.grid_columnconfigure(column, weight=0)
         self.grid_columnconfigure(16, weight=1)
@@ -158,6 +168,11 @@ class Toolbar(ctk.CTkFrame):
         width: int | None = None,
     ) -> ctk.CTkButton:
         options = ribbon_button_style(variant)
+        # ribbon_button_style declares the desired *physical* control height.
+        # CTk applies the Windows/DPI scaling itself, so compensate here to
+        # avoid a two-line label becoming an oversized 81px button at 125%.
+        scale = ctk.ScalingTracker.get_widget_scaling(self)
+        options["height"] = max(1, round(RIBBON_BUTTON_HEIGHT / scale))
         if width is not None:
             options["width"] = width
         button = ctk.CTkButton(

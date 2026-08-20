@@ -268,6 +268,11 @@ export function previewUrlFrom(response: WorkerResponse | undefined): string | n
   return typeof previewUrl === 'string' ? `${BRIDGE_BASE_URL}${previewUrl}` : null
 }
 
+/** URL for the active document, scoped by the bridge rather than a file path. */
+export function activeDocumentUrl(): string {
+  return `${BRIDGE_BASE_URL}/api/document.pdf`
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     const response = await fetch(`${BRIDGE_BASE_URL}${path}`, init)

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
+import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist'
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
@@ -36,6 +38,7 @@ import {
 } from 'lucide-react'
 import {
   callWorker,
+  activeDocumentUrl,
   cancelConverterJob,
   converterResultFileName,
   downloadConverterResult,
@@ -57,6 +60,8 @@ import {
   type WorkerState,
 } from './workerApi'
 import './App.css'
+
+GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
 const fallbackPages: number[] = []
 const defaultZoomPercent = 100
@@ -203,6 +208,7 @@ function App() {
   const [selectedPageIndex, setSelectedPageIndex] = useState(0)
   const [zoomPercent, setZoomPercent] = useState(defaultZoomPercent)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [documentViewerUrl, setDocumentViewerUrl] = useState<string | null>(null)
   const [documentPath, setDocumentPath] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const [canUndo, setCanUndo] = useState(false)
@@ -313,6 +319,7 @@ function App() {
       setCanUndo(false)
       setCanRedo(false)
       setPreviewUrl(null)
+      setDocumentViewerUrl(null)
       setPreviewImageSize(null)
       setMetadataFields(emptyMetadata)
       setFormFields([])
@@ -339,6 +346,13 @@ function App() {
       document.title = `${fileName} - โปรแกรมแก้ไข PDF ภาษาไทย`
     } else {
       document.title = 'โปรแกรมแก้ไข PDF ภาษาไทย'
+    }
+
+    // The PDF.js canvas is used whenever the document has no pending
+    // overlays.  A revision query prevents WebView's HTTP cache from showing
+    // an older document after Save As or a newly opened file.
+    if (!nextState.dirty && (response.command === 'open_pdf' || response.command === 'save_copy')) {
+      setDocumentViewerUrl(`${activeDocumentUrl()}?v=${Date.now()}`)
     }
 
     const nextPreviewUrl = previewUrlFrom(renderResponse)
@@ -1802,6 +1816,8 @@ function App() {
           isBusy={isBusy}
           previewImageSize={previewImageSize}
           previewUrl={previewUrl}
+          documentViewerUrl={documentViewerUrl}
+          useRasterPreview={dirty}
           stageRef={viewerStageRef}
           selectedPage={selectedPageNumber}
           statusMessage={statusMessage}
@@ -2637,6 +2653,8 @@ function Viewer({
   isBusy,
   previewImageSize,
   previewUrl,
+  documentViewerUrl,
+  useRasterPreview,
   stageRef,
   selectedPage,
   statusMessage,
@@ -2646,6 +2664,8 @@ function Viewer({
   isBusy: boolean
   previewImageSize: PreviewImageSize | null
   previewUrl: string | null
+  documentViewerUrl: string | null
+  useRasterPreview: boolean
   stageRef: RefObject<HTMLDivElement | null>
   selectedPage: number
   statusMessage: string
@@ -2720,8 +2740,10 @@ function Viewer({
   return (
     <section className="viewer" aria-label="พื้นที่แสดง PDF">
       <div ref={stageRef} className="viewer-stage" style={{ '--viewer-zoom': `${zoom / 100}` } as CSSProperties}>
-        <div className={`document-page ${previewUrl ? 'is-worker-preview' : 'is-fallback'}`}>
-          {previewUrl ? (
+        <div className={`document-page ${previewUrl || documentViewerUrl ? 'is-worker-preview' : 'is-fallback'}`}>
+          {!useRasterPreview && documentViewerUrl ? (
+            <PdfVectorPage documentUrl={documentViewerUrl} pageNumber={selectedPage} zoom={zoom} />
+          ) : previewUrl ? (
             <img
               className="pdf-preview-image"
               src={previewUrl}
@@ -2768,6 +2790,56 @@ function Viewer({
       </div>
     </section>
   )
+}
+
+function PdfVectorPage({ documentUrl, pageNumber, zoom }: { documentUrl: string; pageNumber: number; zoom: number }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let documentProxy: PDFDocumentProxy | null = null
+    let renderTask: { cancel: () => void } | null = null
+
+    const render = async () => {
+      try {
+        setError(null)
+        const loadingTask = getDocument({ url: documentUrl })
+        documentProxy = await loadingTask.promise
+        const page = await documentProxy.getPage(pageNumber)
+        const canvas = canvasRef.current
+        if (cancelled || !canvas) {
+          return
+        }
+        const outputScale = window.devicePixelRatio || 1
+        const cssViewport = page.getViewport({ scale: zoom / 100 })
+        const renderViewport = page.getViewport({ scale: (zoom / 100) * outputScale })
+        canvas.width = Math.ceil(renderViewport.width)
+        canvas.height = Math.ceil(renderViewport.height)
+        canvas.style.width = `${Math.ceil(cssViewport.width)}px`
+        canvas.style.height = `${Math.ceil(cssViewport.height)}px`
+        const task = page.render({ canvas, viewport: renderViewport })
+        renderTask = task
+        await task.promise
+      } catch (renderError) {
+        if (!cancelled) {
+          setError(renderError instanceof Error ? renderError.message : 'แสดง PDF ไม่สำเร็จ')
+        }
+      }
+    }
+
+    void render()
+    return () => {
+      cancelled = true
+      renderTask?.cancel()
+      documentProxy?.destroy()
+    }
+  }, [documentUrl, pageNumber, zoom])
+
+  if (error) {
+    return <div className="viewer-native-error">{error}</div>
+  }
+  return <canvas ref={canvasRef} className="pdf-vector-canvas" aria-label={`เอกสาร PDF หน้า ${pageNumber}`} />
 }
 
 function FallbackPage() {

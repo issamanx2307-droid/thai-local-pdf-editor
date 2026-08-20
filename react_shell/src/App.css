@@ -344,13 +344,21 @@
   box-shadow: none;
 }
 
-.pdf-preview-image {
+.pdf-preview-image,
+.pdf-vector-canvas {
   display: block;
   max-width: none;
   background: #ffffff;
-  image-rendering: -webkit-optimize-contrast;
-  image-rendering: high-quality;
   box-shadow: 0 2px 18px rgba(16, 32, 61, 0.18);
+}
+
+.viewer-native-error {
+  width: 520px;
+  padding: 24px;
+  color: #9f1239;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: 8px;
 }
 
 .viewer-toast {

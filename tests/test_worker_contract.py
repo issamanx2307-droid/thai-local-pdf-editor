@@ -351,6 +351,7 @@ def test_worker_save_copy_writes_new_file_and_clears_dirty(tmp_path) -> None:
         assert output_path.exists()
         assert saved["state"]["total_pages"] == 4
         assert saved["state"]["dirty"] is False
+        assert saved["state"]["current_file_path"] == str(output_path)
         assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
     finally:
         session.close()

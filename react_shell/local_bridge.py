@@ -147,6 +147,10 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
             self._send_preview(parsed.path.removeprefix("/api/previews/"))
             return
 
+        if parsed.path == "/api/document.pdf":
+            self._send_active_document()
+            return
+
         self._send_error(HTTPStatus.NOT_FOUND, "route not found")
 
     def do_POST(self) -> None:
@@ -293,6 +297,31 @@ class ReactBridgeHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _send_active_document(self) -> None:
+        """Serve only the active in-memory PDF to the local viewer.
+
+        The browser never receives an arbitrary filesystem path.  This keeps
+        PDF.js on the same origin-safe bridge surface as the raster preview,
+        while allowing it to render the page at the screen's actual scale.
+        """
+        with self.server.session_lock:
+            if not self.server.session.state.has_document:
+                self._send_error(HTTPStatus.NOT_FOUND, "ยังไม่ได้เปิดไฟล์ PDF")
+                return
+            try:
+                document_bytes = self.server.session.document.raw.tobytes(garbage=4, deflate=True)
+            except Exception:
+                LOGGER.exception("could not serialize active PDF for native viewer")
+                self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "ไม่สามารถแสดงเอกสาร PDF ได้")
+                return
+
+        self.send_response(HTTPStatus.OK)
+        self._send_common_headers(content_type="application/pdf")
+        self.send_header("Content-Disposition", "inline; filename=active-document.pdf")
+        self.send_header("Content-Length", str(len(document_bytes)))
+        self.end_headers()
+        self.wfile.write(document_bytes)
 
     def _proxy_converter(self, method: str, target_path: str, payload: dict[str, Any] | None = None) -> None:
         """Forward a fixed, JSON-only converter API surface through this bridge."""
