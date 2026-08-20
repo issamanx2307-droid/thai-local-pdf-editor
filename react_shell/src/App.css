@@ -9,26 +9,54 @@
 }
 
 .toolbar {
-  min-height: 82px;
+  display: grid;
+  grid-template-rows: 32px 64px;
+  border-bottom: 1px solid #cbd2dc;
+  background: #f8fafc;
+  overflow: hidden;
+}
+
+.app-menubar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 16px;
+  color: #ecf1f8;
+  background: #20242b;
+}
+
+.app-brand,
+.app-menu { display: flex; align-items: center; }
+.app-brand { gap: 7px; font: 700 12px/1 "Segoe UI", Tahoma, sans-serif; white-space: nowrap; }
+.app-brand svg { color: #3b82f6; }
+.app-menu { align-self: stretch; gap: 4px; }
+.menu-item { height: 100%; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; color: #c9d1dd; background: transparent; font: 600 12px/1 Tahoma, "Leelawadee UI", sans-serif; cursor: pointer; }
+.menu-item:hover,
+.menu-item.is-active,
+.menu-item.is-selected { color: #fff; border-bottom-color: #4b93ff; background: rgba(255, 255, 255, 0.06); }
+.app-menubar-status { margin-left: auto; color: #aeb8c8; font: 600 11px/1 "Segoe UI", Tahoma, sans-serif; }
+
+.ribbon-row {
   display: flex;
   align-items: stretch;
-  gap: 10px;
-  padding: 4px 14px 6px;
+  gap: 0;
+  padding: 3px 12px 4px;
   overflow-x: auto;
-  border-bottom: 1px solid #cfd9e8;
-  background: #f8fbff;
+  background: #fbfcfe;
 }
 
 .toolbar-group {
   min-width: max-content;
   display: grid;
-  grid-template-rows: 16px 1fr;
-  gap: 4px;
+  grid-template-rows: 12px 1fr;
+  gap: 1px;
+  padding: 0 10px;
+  border-right: 1px solid #d9e0ea;
 }
 
 .toolbar-label {
   text-align: center;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: #465a78;
 }
@@ -36,7 +64,7 @@
 .toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
 }
 
 .tool-button,
@@ -45,22 +73,22 @@
 .secondary-action,
 .danger-action,
 .highlight-action {
-  height: 54px;
-  border: 1px solid #8aa4cb;
-  border-radius: 7px;
-  background: linear-gradient(#ffffff, #edf4ff);
+  height: 42px;
+  border: 1px solid #b9c9df;
+  border-radius: 4px;
+  background: #f7faff;
   color: #0f56c9;
   box-shadow: 0 1px 0 #ffffff inset, 0 2px 4px rgba(31, 64, 110, 0.14);
-  font: 700 13px/1.1 Tahoma, "Leelawadee UI", "Segoe UI", sans-serif;
+  font: 700 11px/1.05 Tahoma, "Leelawadee UI", "Segoe UI", sans-serif;
   cursor: pointer;
 }
 
 .tool-button {
-  width: 70px;
+  width: 52px;
   display: grid;
   place-items: center;
-  gap: 4px;
-  padding: 6px 8px;
+  gap: 2px;
+  padding: 3px 5px;
 }
 
 .tool-button svg {
@@ -70,7 +98,7 @@
 }
 
 .tool-button.is-wide {
-  width: 104px;
+  width: 68px;
 }
 
 .tool-button.is-active,
@@ -120,15 +148,16 @@
 
 .zoom-readout,
 .page-control {
-  height: 38px;
-  min-width: 66px;
+  height: 32px;
+  min-width: 56px;
   display: grid;
   place-items: center;
   align-self: center;
-  border-radius: 7px;
-  background: #eef3fb;
+  border: 1px solid #d4deeb;
+  border-radius: 4px;
+  background: #ffffff;
   color: #0b1220;
-  font: 700 15px/1 Tahoma, "Segoe UI", sans-serif;
+  font: 700 13px/1 Tahoma, "Segoe UI", sans-serif;
 }
 
 .page-control {
@@ -157,9 +186,9 @@
 .workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: 300px minmax(420px, 1fr) 376px;
-  gap: 12px;
-  padding: 10px 14px;
+  grid-template-columns: 218px minmax(480px, 1fr) 320px;
+  gap: 8px;
+  padding: 8px 10px;
   overflow: hidden;
 }
 
@@ -171,6 +200,26 @@
 .app-shell.is-viewer-expanded .page-panel,
 .app-shell.is-viewer-expanded .tool-panel {
   display: none;
+}
+
+.app-shell.is-page-panel-hidden .workspace {
+  grid-template-columns: minmax(480px, 1fr) 320px;
+}
+
+.app-shell.is-page-panel-hidden .page-panel {
+  display: none;
+}
+
+.app-shell.is-tool-panel-hidden .workspace {
+  grid-template-columns: 218px minmax(480px, 1fr);
+}
+
+.app-shell.is-tool-panel-hidden .tool-panel {
+  display: none;
+}
+
+.app-shell.is-page-panel-hidden.is-tool-panel-hidden .workspace {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .app-shell.is-viewer-expanded .viewer {
@@ -188,15 +237,15 @@
   flex-direction: column;
   overflow: hidden;
   border: 1px solid #cfd9e8;
-  border-radius: 8px;
-  background: #f8fbff;
+  border-radius: 5px;
+  background: #fbfcfe;
 }
 
 .panel-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px 10px;
+  padding: 10px 12px 8px;
   border-bottom: 1px solid #e0e8f4;
 }
 
@@ -206,7 +255,7 @@
 }
 
 .panel-heading b {
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .panel-heading span {
@@ -217,13 +266,13 @@
 .page-list {
   min-height: 0;
   overflow: auto;
-  padding: 8px 12px;
-  background: #f2f6fc;
+  padding: 6px 8px;
+  background: #f5f7fa;
 }
 
 .page-row {
   width: 100%;
-  height: 28px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -231,7 +280,7 @@
   border-radius: 4px;
   background: transparent;
   color: #18243a;
-  font: 500 15px/1 Tahoma, "Leelawadee UI", sans-serif;
+  font: 600 12px/1 Tahoma, "Leelawadee UI", sans-serif;
   text-align: left;
 }
 
@@ -248,9 +297,9 @@
 
 .page-actions-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 10px 22px 4px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 5px;
+  padding: 7px 8px 0;
 }
 
 .page-actions-grid button,
@@ -269,7 +318,22 @@
 .page-actions-grid button {
   width: 100%;
   margin: 0;
-  height: 42px;
+  height: 32px;
+}
+
+.page-quick-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  padding: 7px 8px 8px;
+}
+
+.page-quick-actions .secondary-action,
+.page-quick-actions .danger-action {
+  width: 100%;
+  height: 32px;
+  margin: 0;
+  padding: 0;
 }
 
 .secondary-action {
@@ -908,6 +972,22 @@
   margin: 0;
   color: #354862;
   font: 600 13px/1.55 Tahoma, "Segoe UI", sans-serif;
+}
+
+/* PDFgear-inspired document workspace: the PDF gets the majority of the window. */
+.viewer { border-radius: 4px; }
+.viewer-stage { background: #686d75; padding: 18px 24px; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 @media (max-width: 1180px) {

@@ -256,6 +256,8 @@ function App() {
   const convertPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [previewImageSize, setPreviewImageSize] = useState<PreviewImageSize | null>(null)
   const [isViewerExpanded, setIsViewerExpanded] = useState(false)
+  const [isPagePanelHidden, setIsPagePanelHidden] = useState(false)
+  const [isToolPanelHidden, setIsToolPanelHidden] = useState(false)
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false)
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false)
   const [pendingPasswordPdf, setPendingPasswordPdf] = useState<PendingPasswordPdf | null>(null)
@@ -1771,11 +1773,16 @@ function App() {
   )
 
   return (
-    <main ref={appShellRef} className={`app-shell ${isViewerExpanded ? 'is-viewer-expanded' : ''}`}>
+    <main
+      ref={appShellRef}
+      className={`app-shell ${isViewerExpanded ? 'is-viewer-expanded' : ''} ${isPagePanelHidden ? 'is-page-panel-hidden' : ''} ${isToolPanelHidden ? 'is-tool-panel-hidden' : ''}`}
+    >
       <Toolbar
         canRedo={canRedo}
         canUndo={canUndo}
         hasDocument={hasDocument}
+        isPagePanelHidden={isPagePanelHidden}
+        isToolPanelHidden={isToolPanelHidden}
         isViewerExpanded={isViewerExpanded}
         isBusy={isBusy}
         searchResultSummary={searchResultSummary}
@@ -1794,6 +1801,16 @@ function App() {
         onSaveCopy={() => void saveCopy()}
         onMergePdfs={() => mergePdfInputRef.current?.click()}
         onOpenGuide={openGuide}
+        onShowHome={() => {
+          setIsPagePanelHidden(false)
+          setIsToolPanelHidden(false)
+        }}
+        onShowEditTools={() => {
+          setActiveToolTab('edit')
+          setIsToolPanelHidden(false)
+        }}
+        onTogglePagePanel={() => setIsPagePanelHidden((hidden) => !hidden)}
+        onToggleToolPanel={() => setIsToolPanelHidden((hidden) => !hidden)}
         onToggleViewerExpanded={toggleViewerExpanded}
         onUndo={() => void runPendingHistory('undo_pending')}
         onZoomIn={() => void renderPage(selectedPageIndex, Math.min(maxZoomPercent, zoomPercent + 10))}
@@ -1976,6 +1993,8 @@ function Toolbar({
   canRedo,
   canUndo,
   hasDocument,
+  isPagePanelHidden,
+  isToolPanelHidden,
   isViewerExpanded,
   isBusy,
   searchResultSummary,
@@ -1994,6 +2013,10 @@ function Toolbar({
   onSaveCopy,
   onMergePdfs,
   onOpenGuide,
+  onShowHome,
+  onShowEditTools,
+  onTogglePagePanel,
+  onToggleToolPanel,
   onToggleViewerExpanded,
   onUndo,
   onZoomIn,
@@ -2002,6 +2025,8 @@ function Toolbar({
   canRedo: boolean
   canUndo: boolean
   hasDocument: boolean
+  isPagePanelHidden: boolean
+  isToolPanelHidden: boolean
   isViewerExpanded: boolean
   isBusy: boolean
   searchResultSummary: string
@@ -2020,6 +2045,10 @@ function Toolbar({
   onSaveCopy: () => void
   onMergePdfs: () => void
   onOpenGuide: () => void
+  onShowHome: () => void
+  onShowEditTools: () => void
+  onTogglePagePanel: () => void
+  onToggleToolPanel: () => void
   onToggleViewerExpanded: () => void
   onUndo: () => void
   onZoomIn: () => void
@@ -2027,55 +2056,47 @@ function Toolbar({
 }) {
   return (
     <header className="toolbar" aria-label="แถบเครื่องมือแก้ไข PDF">
-      <ToolbarGroup label="ไฟล์">
-        <ToolButton icon={<FolderOpen />} label="เปิดไฟล์" active disabled={isBusy} onClick={onOpenPdf} />
-        <ToolButton icon={<X />} label="ล้างจอ" disabled={isBusy || !hasDocument} onClick={onCloseDocument} />
-        <ToolButton icon={<Save />} label="บันทึก" disabled={isBusy || !hasDocument} onClick={onSaveCopy} />
-        <ToolButton icon={<Printer />} label="พิมพ์" disabled={isBusy || !hasDocument} onClick={onPrint} />
-      </ToolbarGroup>
-      <ToolbarGroup label="แก้ไข">
-        <ToolButton icon={<Undo2 />} label="ย้อนกลับ" disabled={isBusy || !canUndo} onClick={onUndo} />
-        <ToolButton icon={<Redo2 />} label="ทำซ้ำ" disabled={isBusy || !canRedo} onClick={onRedo} />
-        <ToolButton icon={<FileDown />} label="รวม PDF" disabled={isBusy} onClick={onMergePdfs} />
-      </ToolbarGroup>
-      <ToolbarGroup label="มุมมอง">
-        <ToolButton icon={<ZoomOut />} label="ซูม-" disabled={isBusy || !hasDocument} onClick={onZoomOut} />
-        <div className="zoom-readout" aria-live="polite">
-          {zoom}%
-        </div>
-        <ToolButton icon={<ZoomIn />} label="ซูม+" disabled={isBusy || !hasDocument} onClick={onZoomIn} />
-        <ToolButton icon={<Maximize2 />} label="พอดีกว้าง" wide disabled={isBusy || !hasDocument} onClick={onFitWidth} />
-        <ToolButton icon={<Maximize2 />} label="พอดีบน-ล่าง" wide disabled={isBusy || !hasDocument} onClick={onFitHeight} />
-        <ToolButton
-          icon={<Maximize2 />}
-          label={isViewerExpanded ? 'ย่อจอ' : 'เต็มจอ'}
-          disabled={isBusy}
-          onClick={onToggleViewerExpanded}
-        />
-      </ToolbarGroup>
-      <ToolbarGroup label="ไปที่หน้า">
-        <ToolButton
-          icon={<ArrowLeft />}
-          label="ก่อน"
-          disabled={isBusy || !hasDocument || selectedPage <= 1}
-          onClick={onPreviousPage}
-        />
-        <div className="page-control" aria-live="polite">
-          <span>{selectedPage}</span>
-          <small>/ {totalPages}</small>
-        </div>
-        <ToolButton
-          icon={<ArrowRight />}
-          label="ถัด"
-          disabled={isBusy || !hasDocument || selectedPage >= totalPages}
-          onClick={onNextPage}
-        />
-      </ToolbarGroup>
-      <ToolbarGroup label="ช่วยเหลือ">
-        <ToolButton icon={<Search />} label="ค้นหา" disabled={isBusy || !hasDocument} onClick={onRunSearch} />
-        {searchResultSummary ? <div className="search-readout">{searchResultSummary}</div> : null}
-        <ToolButton icon={<MousePointer2 />} label="คู่มือ" onClick={onOpenGuide} />
-      </ToolbarGroup>
+      <div className="app-menubar">
+        <div className="app-brand"><FileText size={16} /><span>Thai PDF Editor</span></div>
+        <nav aria-label="เมนูหลัก" className="app-menu">
+          <button className="menu-item is-active" type="button" onClick={onShowHome}>หน้าแรก</button>
+          <button className="menu-item" type="button" onClick={onShowEditTools}>แก้ไข</button>
+          <button className={`menu-item ${isPagePanelHidden ? '' : 'is-selected'}`} type="button" aria-pressed={!isPagePanelHidden} onClick={onTogglePagePanel}>หน้า</button>
+          <button className={`menu-item ${isToolPanelHidden ? '' : 'is-selected'}`} type="button" aria-pressed={!isToolPanelHidden} onClick={onToggleToolPanel}>เครื่องมือ</button>
+        </nav>
+        <span className="app-menubar-status">{hasDocument ? `หน้า ${selectedPage} / ${totalPages}` : 'Local only'}</span>
+      </div>
+      <div className="ribbon-row">
+        <ToolbarGroup label="ไฟล์">
+          <ToolButton icon={<FolderOpen />} label="เปิด" active disabled={isBusy} onClick={onOpenPdf} />
+          <ToolButton icon={<Save />} label="บันทึก" disabled={isBusy || !hasDocument} onClick={onSaveCopy} />
+          <ToolButton icon={<Printer />} label="พิมพ์" disabled={isBusy || !hasDocument} onClick={onPrint} />
+          <ToolButton icon={<X />} label="ปิด" disabled={isBusy || !hasDocument} onClick={onCloseDocument} />
+        </ToolbarGroup>
+        <ToolbarGroup label="แก้ไข">
+          <ToolButton icon={<Undo2 />} label="ย้อนกลับ" disabled={isBusy || !canUndo} onClick={onUndo} />
+          <ToolButton icon={<Redo2 />} label="ทำซ้ำ" disabled={isBusy || !canRedo} onClick={onRedo} />
+          <ToolButton icon={<FileDown />} label="รวม" disabled={isBusy} onClick={onMergePdfs} />
+        </ToolbarGroup>
+        <ToolbarGroup label="มุมมอง">
+          <ToolButton icon={<ZoomOut />} label="ซูม-" disabled={isBusy || !hasDocument} onClick={onZoomOut} />
+          <div className="zoom-readout" aria-live="polite">{zoom}%</div>
+          <ToolButton icon={<ZoomIn />} label="ซูม+" disabled={isBusy || !hasDocument} onClick={onZoomIn} />
+          <ToolButton icon={<Maximize2 />} label="กว้าง" disabled={isBusy || !hasDocument} onClick={onFitWidth} />
+          <ToolButton icon={<Maximize2 />} label="พอดีหน้า" wide disabled={isBusy || !hasDocument} onClick={onFitHeight} />
+          <ToolButton icon={<Maximize2 />} label={isViewerExpanded ? 'ย่อจอ' : 'เต็มจอ'} disabled={isBusy} onClick={onToggleViewerExpanded} />
+        </ToolbarGroup>
+        <ToolbarGroup label="ไปที่หน้า">
+          <ToolButton icon={<ArrowLeft />} label="ก่อน" disabled={isBusy || !hasDocument || selectedPage <= 1} onClick={onPreviousPage} />
+          <div className="page-control" aria-live="polite"><span>{selectedPage}</span><small>/ {totalPages}</small></div>
+          <ToolButton icon={<ArrowRight />} label="ถัด" disabled={isBusy || !hasDocument || selectedPage >= totalPages} onClick={onNextPage} />
+        </ToolbarGroup>
+        <ToolbarGroup label="ค้นหา">
+          <ToolButton icon={<Search />} label="ค้นหา" disabled={isBusy || !hasDocument} onClick={onRunSearch} />
+          {searchResultSummary ? <div className="search-readout">{searchResultSummary}</div> : null}
+          <ToolButton icon={<MousePointer2 />} label="คู่มือ" onClick={onOpenGuide} />
+        </ToolbarGroup>
+      </div>
     </header>
   )
 }
@@ -2595,56 +2616,39 @@ function PagePanel({
       </div>
       <div className="page-actions-grid">
         <button
+          aria-label="ย้ายหน้าขึ้น"
+          title="ย้ายหน้าขึ้น"
           disabled={isBusy || !hasDocument || selectedPageIndex <= 0}
           onClick={() => onMoveSelectedPage(-1)}
           type="button"
         >
           <ArrowUp size={16} />
-          ขึ้น
         </button>
         <button
+          aria-label="ย้ายหน้าลง"
+          title="ย้ายหน้าลง"
           disabled={isBusy || !hasDocument || selectedPageIndex >= pages.length - 1}
           onClick={() => onMoveSelectedPage(1)}
           type="button"
         >
           <ArrowDown size={16} />
-          ลง
         </button>
       </div>
       <div className="page-actions-grid">
         <button disabled={isBusy || !hasDocument} onClick={() => onRotateSelectedPage(-90)} type="button">
+          <span className="sr-only">หมุนซ้าย</span>
           <RotateCcw size={16} />
-          หมุนซ้าย
         </button>
         <button disabled={isBusy || !hasDocument} onClick={() => onRotateSelectedPage(90)} type="button">
+          <span className="sr-only">หมุนขวา</span>
           <RotateCw size={16} />
-          หมุนขวา
         </button>
       </div>
-      <button
-        className="secondary-action"
-        disabled={isBusy || !hasDocument}
-        onClick={onDuplicateSelectedPage}
-        type="button"
-      >
-        ทำซ้ำหน้า
-      </button>
-      <button
-        className="secondary-action"
-        disabled={isBusy || !hasDocument}
-        onClick={onExtractSelectedPage}
-        type="button"
-      >
-        แยกหน้านี้
-      </button>
-      <button
-        className="danger-action"
-        disabled={isBusy || !hasDocument || pages.length <= 1}
-        onClick={onDeleteSelectedPage}
-        type="button"
-      >
-        ลบหน้า
-      </button>
+      <div className="page-quick-actions">
+        <button aria-label="ทำซ้ำหน้า" className="secondary-action" disabled={isBusy || !hasDocument} onClick={onDuplicateSelectedPage} title="ทำซ้ำหน้า" type="button"><Layers size={16} /></button>
+        <button aria-label="แยกหน้านี้" className="secondary-action" disabled={isBusy || !hasDocument} onClick={onExtractSelectedPage} title="แยกหน้านี้" type="button"><FileDown size={16} /></button>
+        <button aria-label="ลบหน้า" className="danger-action" disabled={isBusy || !hasDocument || pages.length <= 1} onClick={onDeleteSelectedPage} title="ลบหน้า" type="button"><Ban size={16} /></button>
+      </div>
     </aside>
   )
 }
