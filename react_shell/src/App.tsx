@@ -46,6 +46,7 @@ import {
   getConverterJob,
   lastRenderResponse,
   previewUrlFrom,
+  responseHasCommand,
   retryConverterJob,
   startConverterJob,
   uploadLocalImage,
@@ -351,7 +352,7 @@ function App() {
     // The PDF.js canvas is used whenever the document has no pending
     // overlays.  A revision query prevents WebView's HTTP cache from showing
     // an older document after Save As or a newly opened file.
-    if (!nextState.dirty && (response.command === 'open_pdf' || response.command === 'save_copy')) {
+    if (!nextState.dirty && (responseHasCommand(response, 'open_pdf') || responseHasCommand(response, 'save_copy'))) {
       setDocumentViewerUrl(`${activeDocumentUrl()}?v=${Date.now()}`)
     }
 

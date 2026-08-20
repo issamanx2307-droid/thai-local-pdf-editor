@@ -263,6 +263,11 @@ export function lastRenderResponse(response: WorkerResponse): WorkerResponse | u
   return response.responses?.findLast((item) => item.command === 'render_page')
 }
 
+/** Return whether a direct or batched worker response contains a command. */
+export function responseHasCommand(response: WorkerResponse, command: WorkerCommandName): boolean {
+  return response.command === command || Boolean(response.responses?.some((item) => item.command === command))
+}
+
 export function previewUrlFrom(response: WorkerResponse | undefined): string | null {
   const previewUrl = response?.payload.preview_url
   return typeof previewUrl === 'string' ? `${BRIDGE_BASE_URL}${previewUrl}` : null
