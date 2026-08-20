@@ -9,7 +9,7 @@ from pathlib import Path
 import fitz
 from PIL import Image
 
-from thai_pdf_editor.app.constants import PREVIEW_CACHE_SIZE
+from thai_pdf_editor.app.constants import PREVIEW_CACHE_SIZE, PREVIEW_SUPERSAMPLE
 from thai_pdf_editor.app.core.errors import PdfRenderError
 from thai_pdf_editor.app.core.overlay_operations import render_overlay_preview
 from thai_pdf_editor.app.models.operations import PdfOperation
@@ -17,11 +17,20 @@ from thai_pdf_editor.app.models.operations import PdfOperation
 
 @dataclass
 class RenderedPage:
-    """Rendered PDF preview image with source page dimensions."""
+    """Rendered PDF preview image with source page dimensions.
+
+    ``image`` is rendered at ``PREVIEW_SUPERSAMPLE`` times the nominal zoom
+    for on-screen sharpness. ``logical_width``/``logical_height`` describe
+    the pre-supersample pixel size (i.e. what the UI should display the
+    image *as*, in CSS pixels) so overlay/position math tied to the zoom
+    level is unaffected by the extra raster resolution.
+    """
 
     image: Image.Image
     page_width: float
     page_height: float
+    logical_width: int
+    logical_height: int
 
 
 class PdfRenderer:
@@ -62,7 +71,8 @@ class PdfRenderer:
         try:
             with self._fitz_lock:
                 page = document.load_page(page_index)
-                matrix = fitz.Matrix(zoom, zoom)
+                render_zoom = zoom * PREVIEW_SUPERSAMPLE
+                matrix = fitz.Matrix(render_zoom, render_zoom)
                 pixmap = page.get_pixmap(matrix=matrix, alpha=False)
                 image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
                 page_width = page.rect.width
@@ -71,9 +81,17 @@ class PdfRenderer:
             raise PdfRenderError("แสดงตัวอย่าง PDF ไม่สำเร็จ", detail=str(exc)) from exc
 
         if pending_operations:
-            image = render_overlay_preview(image, pending_operations, page_index=page_index, zoom=zoom)
+            image = render_overlay_preview(image, pending_operations, page_index=page_index, zoom=render_zoom)
 
-        rendered = RenderedPage(image=image, page_width=page_width, page_height=page_height)
+        logical_width = max(1, round(image.width / PREVIEW_SUPERSAMPLE))
+        logical_height = max(1, round(image.height / PREVIEW_SUPERSAMPLE))
+        rendered = RenderedPage(
+            image=image,
+            page_width=page_width,
+            page_height=page_height,
+            logical_width=logical_width,
+            logical_height=logical_height,
+        )
         with self._cache_lock:
             self._cache[cache_key] = rendered
             self._cache.move_to_end(cache_key)
@@ -111,7 +129,8 @@ class PdfRenderer:
                 if not 0 <= page_index < document.page_count:
                     return
                 page = document.load_page(page_index)
-                matrix = fitz.Matrix(zoom, zoom)
+                render_zoom = zoom * PREVIEW_SUPERSAMPLE
+                matrix = fitz.Matrix(render_zoom, render_zoom)
                 pixmap = page.get_pixmap(matrix=matrix, alpha=False)
                 image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
                 page_width = page.rect.width
@@ -120,9 +139,17 @@ class PdfRenderer:
             return
 
         if pending_operations:
-            image = render_overlay_preview(image, pending_operations, page_index=page_index, zoom=zoom)
+            image = render_overlay_preview(image, pending_operations, page_index=page_index, zoom=render_zoom)
 
-        rendered = RenderedPage(image=image, page_width=page_width, page_height=page_height)
+        logical_width = max(1, round(image.width / PREVIEW_SUPERSAMPLE))
+        logical_height = max(1, round(image.height / PREVIEW_SUPERSAMPLE))
+        rendered = RenderedPage(
+            image=image,
+            page_width=page_width,
+            page_height=page_height,
+            logical_width=logical_width,
+            logical_height=logical_height,
+        )
         with self._cache_lock:
             if cache_key not in self._cache:  # double-check under lock
                 self._cache[cache_key] = rendered

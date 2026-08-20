@@ -347,8 +347,9 @@
 .pdf-preview-image {
   display: block;
   max-width: none;
-  height: auto;
   background: #ffffff;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: high-quality;
   box-shadow: 0 2px 18px rgba(16, 32, 61, 0.18);
 }
 

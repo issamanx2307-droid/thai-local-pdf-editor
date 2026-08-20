@@ -224,8 +224,8 @@ class PdfWorkerSession:
             self.state,
             {
                 "preview_path": str(preview_path),
-                "image_width": rendered.image.width,
-                "image_height": rendered.image.height,
+                "image_width": rendered.logical_width,
+                "image_height": rendered.logical_height,
                 "page_width": rendered.page_width,
                 "page_height": rendered.page_height,
             },

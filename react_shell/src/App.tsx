@@ -1800,6 +1800,7 @@ function App() {
         <Viewer
           bridgeStatus={bridgeStatus}
           isBusy={isBusy}
+          previewImageSize={previewImageSize}
           previewUrl={previewUrl}
           stageRef={viewerStageRef}
           selectedPage={selectedPageNumber}
@@ -2634,6 +2635,7 @@ function PagePanel({
 function Viewer({
   bridgeStatus,
   isBusy,
+  previewImageSize,
   previewUrl,
   stageRef,
   selectedPage,
@@ -2642,6 +2644,7 @@ function Viewer({
 }: {
   bridgeStatus: BridgeStatus
   isBusy: boolean
+  previewImageSize: PreviewImageSize | null
   previewUrl: string | null
   stageRef: RefObject<HTMLDivElement | null>
   selectedPage: number
@@ -2719,7 +2722,16 @@ function Viewer({
       <div ref={stageRef} className="viewer-stage" style={{ '--viewer-zoom': `${zoom / 100}` } as CSSProperties}>
         <div className={`document-page ${previewUrl ? 'is-worker-preview' : 'is-fallback'}`}>
           {previewUrl ? (
-            <img className="pdf-preview-image" src={previewUrl} alt={`ตัวอย่าง PDF หน้า ${selectedPage}`} />
+            <img
+              className="pdf-preview-image"
+              src={previewUrl}
+              alt={`ตัวอย่าง PDF หน้า ${selectedPage}`}
+              style={
+                previewImageSize
+                  ? { width: `${previewImageSize.width}px`, height: `${previewImageSize.height}px` }
+                  : undefined
+              }
+            />
           ) : (
             <FallbackPage />
           )}
