@@ -789,7 +789,16 @@ class PdfWorkerSession:
         # In particular, pending overlays/redactions are applied during the
         # safe-save pass, so reopening makes the clean PDF.js viewer and the
         # next edit operation see exactly the bytes the user just saved.
+        # PdfDocument.open() resets navigation state to page 1 / default
+        # zoom, so capture and restore the user's current view -- otherwise
+        # every Save yanks the viewport back to the first page mid-edit.
+        resume_page_index = self.state.current_page_index
+        resume_zoom_level = self.state.zoom_level
+        resume_selected_tool = self.state.selected_tool
         self.document.open(saved_path)
+        self.state.zoom_level = resume_zoom_level
+        self.state.selected_tool = resume_selected_tool
+        self.state.set_current_page(max(0, min(resume_page_index, self.state.total_pages - 1)))
         self.renderer.clear_cache()
         return success_response(
             COMMAND_SAVE_COPY,

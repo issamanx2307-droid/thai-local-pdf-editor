@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
-import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist'
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -2853,14 +2853,18 @@ function PdfVectorPage({ documentUrl, pageNumber, zoom }: { documentUrl: string;
 
   useEffect(() => {
     let cancelled = false
-    let documentProxy: PDFDocumentProxy | null = null
     let renderTask: { cancel: () => void } | null = null
+    // Hoisted so cleanup can always reach it, even if unmount/dep-change
+    // happens while the document is still loading (fast zoom/page changes).
+    // loadingTask.destroy() tears down the fetch + pdf.js worker whether or
+    // not the load has resolved yet; a bare documentProxy.destroy() call in
+    // cleanup would miss that in-flight case and leak the worker/document.
+    const loadingTask = getDocument({ url: documentUrl })
 
     const render = async () => {
       try {
         setError(null)
-        const loadingTask = getDocument({ url: documentUrl })
-        documentProxy = await loadingTask.promise
+        const documentProxy = await loadingTask.promise
         const page = await documentProxy.getPage(pageNumber)
         const canvas = canvasRef.current
         if (cancelled || !canvas) {
@@ -2887,7 +2891,7 @@ function PdfVectorPage({ documentUrl, pageNumber, zoom }: { documentUrl: string;
     return () => {
       cancelled = true
       renderTask?.cancel()
-      documentProxy?.destroy()
+      void loadingTask.destroy()
     }
   }, [documentUrl, pageNumber, zoom])
 
@@ -2904,13 +2908,15 @@ function PdfVectorDocument({ documentUrl, pageCount, zoom }: { documentUrl: stri
 
   useEffect(() => {
     let cancelled = false
-    let documentProxy: PDFDocumentProxy | null = null
     const renderTasks: Array<{ cancel: () => void }> = []
+    // Hoisted for the same reason as PdfVectorPage: cleanup must be able to
+    // cancel the load even if it's still in flight when deps change, or the
+    // fetch + pdf.js worker for the whole document leaks.
+    const loadingTask = getDocument({ url: documentUrl })
     const render = async () => {
       try {
         setError(null)
-        const loadingTask = getDocument({ url: documentUrl })
-        documentProxy = await loadingTask.promise
+        const documentProxy = await loadingTask.promise
         for (const pageNumber of pageNumbers) {
           const canvas = canvasRefs.current.get(pageNumber)
           if (cancelled || !canvas) {
@@ -2938,7 +2944,7 @@ function PdfVectorDocument({ documentUrl, pageCount, zoom }: { documentUrl: stri
     return () => {
       cancelled = true
       renderTasks.forEach((task) => task.cancel())
-      documentProxy?.destroy()
+      void loadingTask.destroy()
     }
   }, [documentUrl, pageNumbers, zoom])
 
